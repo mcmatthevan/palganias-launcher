@@ -1,7 +1,7 @@
-"""Addons management for mods/resourcepacks/shaderpacks via Modrinth.
+"""
+Minecraft Addons management
+Uses Modrinth API to fetch and install addons (mods, resource packs, shader packs)
 
-This module only manages files prefixed by ``palgania_launcher`` to avoid
-interfering with user-managed files.
 """
 
 from __future__ import annotations
@@ -13,49 +13,146 @@ import platform
 import shutil
 import urllib.parse
 import urllib.request
+import urllib.error
 from typing import Dict, List, Optional, Tuple
-
 
 MODRINTH_BASE = "https://api.modrinth.com/v2"
 PREFIX = "palgania_launcher"
 
-# Map addon type to Modrinth project_type facet
 PROJECT_TYPE_MAP: Dict[str, str] = {
     "mods": "mod",
     "resourcepacks": "resourcepack",
     "shaderpacks": "shader",
 }
 
-# Map launcher loader to modrinth loader facet value (used in version selection only)
 LOADER_MAP: Dict[str, str] = {
-    "vanilla": "minecraft",  # Modrinth uses "minecraft" for vanilla packs
+    "vanilla": "minecraft",
     "fabric": "fabric",
     "forge": "forge",
     "neoforge": "neoforge",
+    "iris": "iris"
 }
 
-
 class AddonNotFoundError(Exception):
-    """Raised when no addon can be found for a given keyword."""
+    """Raised when an addon cannot be found by keyword"""
+    pass
 
-
+class ModRinthRequestWrapper:
+    def search(self, query: str, facets: dict = {}, limit: int = 1, offset: int = 0, **kwargs) -> dict:
+        """
+        GET /search
+        kwargs can contain additional facets such as 
+        versions, categories (loader), project_type, etc.
+        """
+        url = f"{MODRINTH_BASE}/search?{urllib.parse.urlencode({
+            'query': query,
+            'facets': json.dumps([[f"{k}:{v}"] for k, v in facets.items()] + [[f"{k}:{v}"] for k, v in kwargs.items()]),
+            'limit': limit,
+            'offset': offset
+        })}"
+        req = urllib.request.Request(url, headers={"User-Agent": "palgania-launcher/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data
+    
+    def get_project(self, project_id: str):
+        """
+        GET /project/{project_id}
+        """
+        url = f"{MODRINTH_BASE}/project/{project_id}"
+        req = urllib.request.Request(url, headers={"User-Agent": "palgania-launcher/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data
+    
+    def get_versions(self, project_id: str, loaders : list, game_versions: list):
+        """
+        GET /project/{project_id}/version
+        """
+        url = f"{MODRINTH_BASE}/project/{project_id}/version?{urllib.parse.urlencode({
+            'loaders': json.dumps(loaders),
+            'game_versions': json.dumps(game_versions)
+        })}"
+        req = urllib.request.Request(url, headers={"User-Agent": "palgania-launcher/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data
+    
+    def download_file(self, file : dict, dest_dir: pathlib.Path):
+        """
+        Download file from given file dict
+        """
+        if isinstance(dest_dir, str):
+            dest_dir = pathlib.Path(dest_dir)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        url = file.get("url")
+        filename = file.get("filename")
+        if not url:
+            raise ValueError("File URL not found")
+        if not filename:
+            raise ValueError("File name not found")
+        req = urllib.request.Request(url, headers={"User-Agent": "palgania-launcher/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as resp, open(dest_dir / f"{PREFIX}_{filename}", "wb") as f:
+            shutil.copyfileobj(resp, f)
 
 class AddonsManager:
-    def __init__(
-        self,
-        addon_type: str,
-        game_dir: Optional[str] = None,
-        loader: str = "vanilla",
-        version: Optional[str] = None,
-    ) -> None:
+    def __init__(self, addon_type: str, game_dir=None, loader="vanilla", version=None, config_dir=None):
         if addon_type not in PROJECT_TYPE_MAP:
             raise ValueError(f"Unsupported addon_type: {addon_type}")
         self.addon_type = addon_type
         self.game_dir = pathlib.Path(game_dir or self._default_game_dir()).expanduser()
         self.loader = loader.lower()
         self.version = version
+        env_cfg = os.environ.get("PALGANIA_LAUNCHER_CONFIG_DIR", "")
+        self.config_dir = pathlib.Path(config_dir or env_cfg or self._default_config_dir()).expanduser()
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.reqw = ModRinthRequestWrapper()
+        self.local_addons_data = self._load_local_addons_data()
+        self.local_slug_cache = self._load_local_slug_cache()
+        if addon_type == "shaderpacks":
+            self.loader = "iris" # force iris loader for shaderpacks
+        if addon_type == "resourcepacks":
+            self.loader = "vanilla" # force vanilla loader for resourcepacks
 
-    # ------------------------- path helpers -------------------------
+    def _load_local_data(self, file_name: str) -> Dict[str, str]:
+        """
+        Charger les données depuis un fichier JSON
+        Retourner un dictionnaire avec les données
+        """
+        #créer le fichier s'il n'existe pas
+        local_data_file = self.config_dir / file_name
+        if not local_data_file.exists():
+            local_data_file.write_text("{}")
+            return {}
+        try:
+            with open(local_data_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return {}
+        return data
+    
+    def _load_local_addons_data(self) -> Dict[str, dict]:
+        """Charger les données des addons locaux depuis un fichier JSON"""
+        return self._load_local_data("local_addons.json")
+
+    def _load_local_slug_cache(self) -> Dict[str, str]:
+        """Charger les correspondances keyword/slug depuis un fichier JSON"""
+        return self._load_local_data("local_slug_cache.json")
+
+    def _save_local_data(self,data: Dict[str, str], file_name: str):
+        """Sauvegarder les données dans un fichier JSON"""
+        local_data_file = self.config_dir / file_name
+        with open(local_data_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+
+    def _save_local_addons_data(self,data: Dict[str, dict]):
+        """Sauvegarder les données des addons locaux dans un fichier JSON"""
+        self._save_local_data(data, "local_addons.json")
+
+    def _save_local_slug_cache(self,data: Dict[str, str]):
+        """Sauvegarder les correspondances keyword/slug dans un fichier JSON"""
+        self._save_local_data(data, "local_slug_cache.json")
+
     @staticmethod
     def _default_game_dir() -> str:
         system = platform.system().lower()
@@ -68,346 +165,158 @@ class AddonsManager:
         return str(home / ".minecraft")
 
     @staticmethod
-    def _sanitize_keyword(keyword: str) -> str:
-        # Simple slug: lowercase, alnum and dashes/underscores
-        allowed = []
-        for ch in keyword.lower():
-            if ch.isalnum():
-                allowed.append(ch)
-            elif ch in "-_ ":
-                allowed.append("-")
-        slug = "".join(allowed).strip("-")
-        return slug or "addon"
-
-    def _dirs(self) -> Tuple[pathlib.Path, pathlib.Path]:
-        base = self.game_dir
-        target_dir = base / self.addon_type
-        available_dir = base / f"{self.addon_type}_available"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        available_dir.mkdir(parents=True, exist_ok=True)
-        return available_dir, target_dir
-
-    # ------------------------- Modrinth helpers -------------------------
-    def _search_project(self, keyword: str, with_version: bool = True) -> Optional[Dict]:
-        project_type = PROJECT_TYPE_MAP[self.addon_type]
-        # Modrinth MeiliSearch filterable attributes include project_types and game_versions
-        facets = [
-            [f"project_types:{project_type}"]
-        ]
-        if with_version and self.version:
-            facets.append([f"game_versions:{self.version}"])
-        params = {
-            "query": keyword,
-            "facets": json.dumps(facets),
-            "limit": 5,
-        }
-        url = f"{MODRINTH_BASE}/search?{urllib.parse.urlencode(params)}"
-        req = urllib.request.Request(url, headers={"User-Agent": "palgania-launcher/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            hits = data.get("hits", [])
-            return hits[0] if hits else None
-
-    def _get_project(self, project_id_or_slug: str) -> Optional[Dict]:
-        url = f"{MODRINTH_BASE}/project/{project_id_or_slug}"
-        req = urllib.request.Request(url, headers={"User-Agent": "palgania-launcher/1.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except Exception:
-            return None
-
-    def _select_version(self, project_id: str) -> Optional[Dict]:
-        """Select a compatible version with progressive fallback.
-
-        Tries: loader+game_version -> game_version only -> unfiltered.
-        Prefers release types.
-        """
-
-        def fetch(params: Dict[str, str]) -> List[Dict]:
-            query_str = f"?{urllib.parse.urlencode(params)}" if params else ""
-            url = f"{MODRINTH_BASE}/project/{project_id}/version{query_str}"
-            req = urllib.request.Request(url, headers={"User-Agent": "palgania-launcher/1.0"})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-
-        loader_facet = LOADER_MAP.get(self.loader)
-        attempts = []
-        # 1) loader + game_version
-        params = {}
-        if loader_facet:
-            params["loaders"] = json.dumps([loader_facet])
-        if self.version:
-            params["game_versions"] = json.dumps([self.version])
-        attempts.append(params)
-        # 2) game_version only
-        if self.version:
-            attempts.append({"game_versions": json.dumps([self.version])})
-        # 3) unfiltered
-        attempts.append({})
-
-        versions: List[Dict] = []
-        for p in attempts:
-            try:
-                versions = fetch(p)
-            except Exception:
-                versions = []
-            if versions:
-                break
-
-        if not versions:
-            return None
-        for v in versions:
-            if v.get("version_type") == "release":
-                return v
-        return versions[0]
-
-    def _download_file(self, url: str, dest: pathlib.Path) -> None:
-        if dest.exists():
-            return
-        req = urllib.request.Request(url, headers={"User-Agent": "palgania-launcher/1.0"})
-        with urllib.request.urlopen(req, timeout=60) as resp, open(dest, "wb") as f:
-            shutil.copyfileobj(resp, f)
-
-    def _get_metadata_registry_path(self) -> pathlib.Path:
-        """Chemin du fichier JSON central stockant les métadonnées de tous les addons."""
-        return pathlib.Path("addons_metadata.json")
-
-    def _load_metadata_registry(self) -> Dict:
-        """Charge le registre central des métadonnées."""
-        path = self._get_metadata_registry_path()
-        if not path.exists():
-            return {}
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-
-    def _save_metadata_registry(self, registry: Dict) -> None:
-        """Sauvegarde le registre central des métadonnées."""
-        path = self._get_metadata_registry_path()
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(registry, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
-
-    def _get_file_key(self, filepath: pathlib.Path) -> str:
-        """Clé unique pour identifier un fichier dans le registre."""
-        return str(filepath.resolve())
-
-    def _store_addon_metadata(self, filepath: pathlib.Path, version_obj: Dict, keyword: str) -> None:
-        """Stocke les métadonnées d'un addon dans le registre central."""
-        registry = self._load_metadata_registry()
-        key = self._get_file_key(filepath)
-        registry[key] = {
-            "keyword": keyword,
-            "loaders": version_obj.get("loaders", []),
-            "game_versions": version_obj.get("game_versions", []),
-            "version_id": version_obj.get("id"),
-            "project_id": version_obj.get("project_id"),
-            "addon_type": self.addon_type,
-        }
-        self._save_metadata_registry(registry)
-
-    def _get_addon_metadata(self, filepath: pathlib.Path) -> Optional[Dict]:
-        """Récupère les métadonnées d'un addon depuis le registre central."""
-        registry = self._load_metadata_registry()
-        key = self._get_file_key(filepath)
-        return registry.get(key)
-
-    def _is_loader_compatible(self, filepath: pathlib.Path) -> bool:
-        """Vérifie la compatibilité du loader en utilisant les métadonnées stockées."""
-        # Resource packs / shaderpacks sont indépendants du mod loader
-        if self.addon_type != "mods":
-            return True
-        
-        desired = self.loader
-        if desired not in ("fabric", "forge", "neoforge"):
-            return False
-        
-        metadata = self._get_addon_metadata(filepath)
-        if not metadata:
-            # Pas de métadonnées = on ne peut pas déterminer, donc incompatible
-            return False
-        
-        loaders = metadata.get("loaders", [])
-        if isinstance(loaders, list):
-            return desired in [str(x).lower() for x in loaders]
-        
-        return False
-
-    def _is_game_version_compatible(self, filepath: pathlib.Path) -> bool:
-        """Vérifie la compatibilité de la version à partir des métadonnées du registre.
-
-        Règle stricte: exige une correspondance EXACTE de version lorsque des métadonnées existent.
-        (Ne fait plus d'approximations par famille 1.21.x pour éviter les crashs.)
-        """
-        if not self.version:
-            return True
-
-        metadata = self._get_addon_metadata(filepath)
-        if not metadata:
-            # Pas de métadonnées connues
-            return False
-
-        target = str(self.version)
-        game_versions = metadata.get("game_versions", [])
-        if not isinstance(game_versions, list):
-            return False
-
-        return target in game_versions
-
-    def _unmanaged_file_version_compatible(self, filepath: pathlib.Path) -> bool:
-        """Heuristique minimale pour les fichiers non gérés (sans préfixe):
-        - Si le nom de fichier indique explicitement une version (ex: mc1.21.11, 1.21.11),
-          exiger une égalité exacte avec la version cible.
-        - Sinon (pas d'indication explicite), considérer comme compatible (on ne sait pas).
-        """
-        if not self.version:
-            return True
-        name = filepath.name.lower()
-        target = str(self.version)
-        # Cherche des marqueurs explicites dans le nom
-        markers = [f"mc{target}", f"-{target}-", f"_{target}_", f"+mc{target}", f"+{target}", f"-{target}.jar"]
-        # Si on trouve la cible exacte, ok
-        if any(m in name for m in markers):
-            return True
-        # Si le nom encode une autre version explicite 1.XX.YY différente -> incompatible
-        # Détection grossière des versions sous forme 1.x.y (en cherchant 'mc1.' ou '-1.')
-        # On compare simplement la présence d'une autre sous-chaîne '1.' suivie de chiffres
-        # différente de la cible exacte.
-        # Cas courants: 
-        #   sodium-0.8.2+mc1.21.11.jar -> incompatible si target = 1.21.8
-        family_token = target.rsplit('.', 1)[0]  # 1.21 pour 1.21.8
-        # Si une autre version mc1.21.ZZ est présente mais != target, considérer incompatible
-        # Recherche de 'mc1.21.' puis extraction de la suite
-        if f"mc{family_token}." in name:
-            # Il y a une version explicite de cette famille
-            # Exige l'égalité exacte, sinon incompatible
-            return f"mc{target}" in name
-        # Autres formats possibles '-1.21.11-'
-        if f"-{family_token}." in name or f"+{family_token}." in name or f"_{family_token}." in name:
-            return (f"-{target}-" in name) or (f"+{target}" in name) or (f"_{target}_" in name) or name.endswith(f"-{target}.jar")
-        # Pas d'indication explicite: ne pas toucher
-        return True
-
-    # ------------------------- Public API -------------------------
+    def _default_config_dir() -> str:
+        system = platform.system().lower()
+        home = pathlib.Path.home()
+        if system == "windows":
+            return str(home / "AppData/Local/palgania_launcher")
+        if system == "darwin":
+            return str(home / "Library/Application Support/palgania_launcher")
+        return str(home / ".palgania_launcher")
+    
+    def _fetch_local_addon(self, slug_or_keyword: str) -> Optional[pathlib.Path]:
+        """Fetch a local addon by keyword from the local addons data"""
+        slug = self._load_local_slug_cache().get(slug_or_keyword, slug_or_keyword)
+        category = LOADER_MAP.get(self.loader, "minecraft")
+        for _, data in self.local_addons_data.items():
+            if slug == data.get("slug") and self.version in data.get("game_versions", []) and category in data.get("loaders", []):
+                file_path = pathlib.Path(data.get("file_path", ""))
+                if file_path.exists():
+                    return file_path
+        return None
+    
     def fetch_keyword(self, keyword: str) -> Optional[pathlib.Path]:
-        """Download the newest matching addon for keyword into *_available with launcher prefix.
+        # Retourner le chemin du fichier addon téléchargé/existant
+        # ou lever AddonNotFoundError
+        category = LOADER_MAP.get(self.loader, "minecraft")
+        try: 
+            hits = self.reqw.search(
+                query=keyword,
+                project_type=PROJECT_TYPE_MAP[self.addon_type],
+                categories=category,
+                facets={"versions": self.version} if self.version else {}
+            ).get("hits", [])
+            if len(hits) == 0:
+                raise AddonNotFoundError(f"No addon found for keyword: {keyword}")
+            project = hits[0]
+            project_slug = project.get("slug")
+            self.local_slug_cache[keyword] = project_slug
+            self._save_local_slug_cache(self.local_slug_cache)
 
-        Returns the downloaded (or existing) file path.
-        Raises AddonNotFoundError if nothing matches.
-        """
-        available_dir, _ = self._dirs()
-        slug = self._sanitize_keyword(keyword)
+            versions = self.reqw.get_versions(
+                project_id=project_slug,
+                loaders=[category],
+                game_versions=[self.version] if self.version else []
+            )
+            if len(versions) == 0:
+                raise AddonNotFoundError(f"No compatible version found for addon: {keyword}")
+            version = versions[0]
 
-        # 1) Try search with game version
-        project = self._search_project(keyword, with_version=True)
-        # 2) Retry without version if nothing found
-        if not project:
-            project = self._search_project(keyword, with_version=False)
-        # 3) Try direct project fetch by slug/id
-        if not project:
-            project = self._get_project(keyword)
-        if not project:
-            raise AddonNotFoundError(f"Aucun addon trouvé pour '{keyword}'")
-        # Modrinth search returns "project_id" and "slug"; direct fetch returns "id" and "slug"
-        project_id = project.get("project_id") or project.get("id") or project.get("slug")
-        if not project_id:
-            raise AddonNotFoundError(f"Aucun addon trouvé pour '{keyword}'")
+            files = version.get("files", [])
+            if len(files) == 0:
+                raise AddonNotFoundError(f"No files found for addon version: {keyword}")
+            file = files[0]
+            filename = file.get("filename")
+            addons_dir = self.game_dir / (f"{self.addon_type}_available")
+            addons_dir.mkdir(parents=True, exist_ok=True)
+            if filename in self.local_addons_data:
+                local_data = self.local_addons_data[filename]
+                local_file_path = pathlib.Path(local_data.get("file_path", ""))
+                if local_file_path.exists():
+                    # Vérifier si la version locale correspond à la version demandée
+                    if (local_data.get("version_number") == version.get("version_number") and
+                        set(local_data.get("game_versions", [])) == set(version.get("game_versions", [])) and
+                        set(local_data.get("loaders", [])) == set(version.get("loaders", []))):
+                        return local_file_path
 
-        version_obj = self._select_version(project_id)
-        if not version_obj:
-            raise AddonNotFoundError(f"Aucune version compatible trouvée pour '{keyword}'")
-        files = version_obj.get("files", [])
-        if not files:
-            raise AddonNotFoundError(f"Aucun fichier téléchargeable pour '{keyword}'")
-        file_obj = files[0]
-        download_url = file_obj.get("url") or file_obj.get("download_url")
-        filename = file_obj.get("filename") or f"{slug}.jar"
-        prefixed_name = f"{PREFIX}_{slug}_{filename}"
-        dest_path = available_dir / prefixed_name
-        if download_url:
-            self._download_file(download_url, dest_path)
-            # Stocker les métadonnées dans le registre central
-            self._store_addon_metadata(dest_path, version_obj, keyword)
-        return dest_path
-
+            self.reqw.download_file(file, f"{addons_dir}")
+            downloaded_path = addons_dir / f"{PREFIX}_{filename}"
+            # Mettre à jour les données locales
+            if filename not in self.local_addons_data:
+                self.local_addons_data[filename] = {}
+            self.local_addons_data[filename] = {
+                "file_path": str(downloaded_path),
+                "slug": project_slug,
+                "game_versions": version.get("game_versions", []),
+                "loaders": version.get("loaders", []),
+                "version_number": version.get("version_number", ""),
+            }
+            self._save_local_addons_data(self.local_addons_data)
+            return downloaded_path
+        except urllib.error.HTTPError as e:
+            print(e)
+            filename = self._fetch_local_addon(keyword)
+            if filename:
+                print(f"Using local addon for keyword '{keyword}': {filename}")
+                return filename
+            raise AddonNotFoundError(f"HTTP Error fetching addon: {e.code} - {e.reason}")
+        except urllib.error.URLError as e:
+            filename = self._fetch_local_addon(keyword)
+            if filename:
+                print(f"Using local addon for keyword '{keyword}': {filename}")
+                return filename
+            raise AddonNotFoundError(f"URL Error fetching addon: {e.reason}")
+    
     def install_addons(self, keywords: List[str]) -> List[pathlib.Path]:
-        """Move prefixed files matching keywords from *_available to live dir; move others back.
+        # Installer les addons depuis mods_available vers mods
+        # ou lever AddonNotFoundError
+        
+        # Approche transactionnelle : on télécharge tout dans un dossier temporaire d'abord
+        # Si tout réussit, alors on wipe le dossier réel et on déplace.
+        
+        import tempfile
+        
+        addons_dir = self.game_dir / self.addon_type
+        addons_available_dir = self.game_dir / f"{self.addon_type}_available"
+        addons_available_dir.mkdir(parents=True, exist_ok=True)
+        addons_dir.mkdir(parents=True, exist_ok=True)
 
-        Only files starting with the launcher prefix are moved.
-        Returns list of installed file paths in the target directory.
-        """
-        available_dir, target_dir = self._dirs()
-        wanted = {self._sanitize_keyword(k) for k in keywords}
-        installed: List[pathlib.Path] = []
+        temp_install_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"palgania_{self.addon_type}_"))
+        
+        try:
+            installed_paths = []
+            print(f"Préparation de l'installation des {self.addon_type}...")
+            
+            # 1. Télécharger ou récupérer tous les addons demandés dans le dossier unique disponible
+            # Puis les copier dans le dossier temp
+            for keyword in keywords:
+                # fetch_keyword télécharge dans _available
+                source_path = self.fetch_keyword(keyword)
+                if source_path and source_path.exists():
+                    dest_path = temp_install_dir / source_path.name
+                    shutil.copy2(source_path, dest_path)
+                    installed_paths.append(dest_path)
+                else:
+                    raise AddonNotFoundError(f"Addon not found/downloaded for keyword: {keyword}")
+            
+            # 2. Si on arrive ici, tous les addons sont prêts dans temp_install_dir.
+            # On peut nettoyer le dossier cible (mods/resourcepacks)
+            # En ne gardant que ce qu'on veut (ou tout supprimer ? La demande implique une installation propre)
+            # Pour la sûreté, on déplace les anciens fichiers dans _available (backup) s'ils ont notre préfixe
+            for item in addons_dir.iterdir():
+                if item.is_file() and item.name.startswith(PREFIX):
+                    try:
+                        shutil.move(str(item), str(addons_available_dir / item.name))
+                    except shutil.Error:
+                        pass # Déjà existant
+            
+            # 3. Déplacer les nouveaux fichiers depuis temp vers cible
+            final_paths = []
+            for temp_file in installed_paths:
+                final_dest = addons_dir / temp_file.name
+                shutil.move(str(temp_file), str(final_dest))
+                final_paths.append(final_dest)
+                
+            return final_paths
 
-        # ÉTAPE 1: Nettoyer d'abord le dossier target en déplaçant les fichiers incompatibles vers available
-        # Cela évite les conflits de versions (ex: mods 1.21.11 restant quand on lance en 1.21.9)
-        for path in target_dir.iterdir():
-            if path.name.startswith(PREFIX):
-                matched = any(path.name.startswith(f"{PREFIX}_{w}_") for w in wanted)
-                compatible = self._is_loader_compatible(path) and self._is_game_version_compatible(path)
-                if matched and compatible:
-                    continue
-                dest = available_dir / path.name
-                if dest.exists():
-                    dest.unlink()
-                shutil.move(str(path), dest)
-                registry = self._load_metadata_registry()
-                old_key = self._get_file_key(path)
-                if old_key in registry:
-                    new_key = self._get_file_key(dest)
-                    registry[new_key] = registry.pop(old_key)
-                    self._save_metadata_registry(registry)
-            else:
-                # Fichier non géré (pas de préfixe). Si clairement incompatible (version explicite différente), on isole.
-                if self.addon_type == "mods" and not self._unmanaged_file_version_compatible(path):
-                    dest = available_dir / path.name
-                    if dest.exists():
-                        dest.unlink()
-                    shutil.move(str(path), dest)
+        except Exception as e:
+            print(f"Abandon de l'installation des addons: {e}")
+            raise e
+        finally:
+            # Nettoyage du dossier temporaire
+            if temp_install_dir.exists():
+                shutil.rmtree(temp_install_dir, ignore_errors=True)
 
-        # ÉTAPE 2: Installer les fichiers compatibles depuis available vers target
-        for path in available_dir.iterdir():
-            if not path.name.startswith(PREFIX):
-                continue
-            # Decide if this file corresponds to a requested keyword
-            matched = any(path.name.startswith(f"{PREFIX}_{w}_") for w in wanted)
-            if matched and self._is_loader_compatible(path) and self._is_game_version_compatible(path):
-                dest = target_dir / path.name
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                if dest.exists():
-                    dest.unlink()
-                shutil.move(str(path), dest)
-                installed.append(dest)
-                # Mettre à jour le chemin dans le registre des métadonnées
-                registry = self._load_metadata_registry()
-                old_key = self._get_file_key(path)
-                if old_key in registry:
-                    new_key = self._get_file_key(dest)
-                    registry[new_key] = registry.pop(old_key)
-                    self._save_metadata_registry(registry)
-
-        return installed
-
-    def fetch_install(self, keywords: List[str]) -> List[pathlib.Path]:
-        """Fetch (if missing) then install addons for the given keywords.
-
-        Raises AddonNotFoundError if one or more keywords cannot be resolved.
-        """
-        missing: List[str] = []
-        for kw in keywords:
-            try:
-                self.fetch_keyword(kw)
-            except AddonNotFoundError:
-                missing.append(kw)
-            except Exception:
-                # Swallow unexpected errors per keyword but record as missing
-                missing.append(kw)
-        if missing:
-            raise AddonNotFoundError("Addons introuvables: " + ", ".join(missing))
-        return self.install_addons(keywords)
+am = AddonsManager(addon_type="mods",loader="fabric",version="1.21.11")
+bm = AddonsManager(addon_type="resourcepacks",version="1.21.11")
+cm = AddonsManager(addon_type="shaderpacks",version="1.21.11")

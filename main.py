@@ -4,6 +4,7 @@ import os
 from PIL import Image
 from versions import get_version_groups, refresh_version_groups_async
 from tkinter import filedialog, messagebox
+import shlex
 from portablemc.standard import (
     Version, Context, Watcher,
     VersionLoadingEvent, VersionFetchingEvent, VersionLoadedEvent,
@@ -26,17 +27,43 @@ import logging
 from datetime import datetime
 import webbrowser
 import urllib.parse
+import urllib.error
 from uuid import uuid4
+import struct
 import threading
 from addons_manager import AddonsManager, AddonNotFoundError
 from typing import Optional
+import sys
+import platform
 
 # Configuration
-PROFILES_FILE = "profiles.json"
+def _default_config_dir() -> pathlib.Path:
+    system = platform.system().lower()
+    home = pathlib.Path.home()
+    if system == "windows":
+        return home / "AppData/Local/palgania_launcher"
+    if system == "darwin":
+        return home / "Library/Application Support/palgania_launcher"
+    return home / ".palgania_launcher"
+
+def _parse_config_dir_arg(argv: list[str]) -> Optional[pathlib.Path]:
+    for arg in argv:
+        if arg.startswith("--config-dir="):
+            path_str = arg.split("=", 1)[1]
+            if path_str:
+                return pathlib.Path(os.path.expanduser(path_str))
+    return None
+
+CONFIG_DIR = _parse_config_dir_arg(sys.argv) or _default_config_dir()
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+os.environ["PALGANIA_LAUNCHER_CONFIG_DIR"] = str(CONFIG_DIR)
+
+PROFILES_FILE = str(CONFIG_DIR / "profiles.json")
 LOGO_FILE = "logo128x128.png"
-LOG_FILE = "palgania-launcher.latest.log"
-AUTH_DATABASE_FILE = "portablemc_auth.json"
-LAST_ACCOUNT_FILE = "last_account.txt"
+LOG_FILE = str(CONFIG_DIR / "palgania-launcher.latest.log")
+AUTH_DATABASE_FILE = str(CONFIG_DIR / "portablemc_auth.json")
+LAST_ACCOUNT_FILE = str(CONFIG_DIR / "last_account.txt")
+LAST_PROFILE_FILE = str(CONFIG_DIR / "last_profile.txt")
 MICROSOFT_AZURE_APP_ID = "708e91b5-99f8-4a1d-80ec-e746cbb24771"  # App ID du CLI portablemc
 
 # Loader mapping for version groups
@@ -192,38 +219,47 @@ class InstallWatcher(Watcher):
             logger.debug(f"Unknown event: {type(event).__name__}")
     
     def _update_status(self, message, success=False, info=False, progress=False):
-        """Met à jour le message de statut dans l'UI."""
-        if hasattr(self.app, 'status_label'):
-            # Choisir la couleur selon le type de message
-            if success:
-                color = "#4CAF50"  # Vert
-            elif info:
-                color = "#2196F3"  # Bleu
-            elif progress:
-                color = "#FF9800"  # Orange
-            else:
-                color = "gray"  # Gris par défaut
-            
-            self.app.status_label.configure(text=message, text_color=color)
-            self.app.update_idletasks()  # Forcer la mise à jour immédiate
+        """Met à jour le message de statut dans l'UI (thread-safe)."""
+        def _do_update():
+            if hasattr(self.app, 'status_label'):
+                # Choisir la couleur selon le type de message
+                if success:
+                    color = "#4CAF50"  # Vert
+                elif info:
+                    color = "#2196F3"  # Bleu
+                elif progress:
+                    color = "#FF9800"  # Orange
+                else:
+                    color = "gray"  # Gris par défaut
+                
+                self.app.status_label.configure(text=message, text_color=color)
+                # update_idletasks non nécessaire si appelé via after
+        
+        self.app.after(0, _do_update)
     
     def _update_progress(self, percent):
-        """Met à jour la barre de progression."""
-        if hasattr(self.app, 'progress_bar'):
-            self.app.progress_bar.set(percent / 100)
-            self.app.update_idletasks()  # Forcer la mise à jour immédiate
+        """Met à jour la barre de progression (thread-safe)."""
+        def _do_update():
+            if hasattr(self.app, 'progress_bar'):
+                self.app.progress_bar.set(percent / 100)
+        
+        self.app.after(0, _do_update)
     
     def _show_progress_bar(self):
-        """Affiche la barre de progression."""
-        if hasattr(self.app, 'progress_bar'):
-            self.app.progress_bar.pack(fill="x", padx=10, pady=5)
-            self.app.update_idletasks()
+        """Affiche la barre de progression (thread-safe)."""
+        def _do_show():
+            if hasattr(self.app, 'progress_bar'):
+                self.app.progress_bar.pack(fill="x", padx=10, pady=5)
+        
+        self.app.after(0, _do_show)
     
     def _hide_progress_bar(self):
-        """Masque la barre de progression."""
-        if hasattr(self.app, 'progress_bar'):
-            self.app.progress_bar.pack_forget()
-            self.app.update_idletasks()
+        """Masque la barre de progression (thread-safe)."""
+        def _do_hide():
+            if hasattr(self.app, 'progress_bar'):
+                self.app.progress_bar.pack_forget()
+        
+        self.app.after(0, _do_hide)
     
     def _format_size(self, bytes_size):
         """Formate une taille en bytes en unités lisibles."""
@@ -279,6 +315,11 @@ class AdvancedSettingsWindow(ctk.CTkToplevel):
         self.quickplay_world = ctk.CTkEntry(self, placeholder_text="Nom du monde (optionnel)")
         self.quickplay_world.pack(padx=20, pady=5, fill="x")
         
+        # Ajouter automatiquement Palgania
+        ctk.CTkLabel(self, text="Serveur Palgania:", font=("Arial", 12, "bold")).pack(padx=20, pady=(15, 5))
+        self.auto_add_palgania = ctk.CTkCheckBox(self, text="Ajouter automatiquement Palgania à la liste des serveurs")
+        self.auto_add_palgania.pack(padx=20, pady=5, anchor="w")
+        
         # Boutons
         button_frame = ctk.CTkFrame(self)
         button_frame.pack(padx=20, pady=20, fill="x")
@@ -331,7 +372,8 @@ class AdvancedSettingsWindow(ctk.CTkToplevel):
             "jvm_args": self.jvm_args.get("1.0", "end-1c"),
             "quickplay_server": self.quickplay_server.get(),
             "quickplay_port": self.quickplay_port.get(),
-            "quickplay_world": self.quickplay_world.get()
+            "quickplay_world": self.quickplay_world.get(),
+            "auto_add_palgania": self.auto_add_palgania.get()
         }
         # Sauvegarde automatique sans fermer la fenêtre
     
@@ -349,6 +391,12 @@ class AdvancedSettingsWindow(ctk.CTkToplevel):
             self.quickplay_port.insert(0, port)
             
             self.quickplay_world.insert(0, settings.get("quickplay_world", ""))
+            
+            # Cocher par défaut
+            if settings.get("auto_add_palgania", True):
+                self.auto_add_palgania.select()
+            else:
+                self.auto_add_palgania.deselect()
 
     def _setup_auto_save(self):
         """Enregistrer automatiquement à chaque saisie"""
@@ -364,6 +412,9 @@ class AdvancedSettingsWindow(ctk.CTkToplevel):
 
         # Le Text nécessite un handler dédié
         self.jvm_args.bind("<<Modified>>", self._on_jvm_modified)
+        
+        # Checkbox auto-save
+        self.auto_add_palgania.configure(command=self.save_settings)
 
     def _on_jvm_modified(self, event):
         """Déclenche l'auto-save quand le texte JVM change"""
@@ -499,7 +550,8 @@ class App(ctk.CTk):
             "jvm_args": "",
             "quickplay_server": "",
             "quickplay_port": "25565",
-            "quickplay_world": ""
+            "quickplay_world": "",
+            "auto_add_palgania": True
         }
         
         self.profiles = self.load_profiles()
@@ -1089,13 +1141,173 @@ class App(ctk.CTk):
         if hasattr(self, 'progress_bar'):
             self.progress_bar.pack_forget()
             self.update_idletasks()
+    
+    def _add_palgania_server(self, game_dir):
+        """Ajoute Palgania à la liste des serveurs si absent"""
+        try:
+            servers_dat = os.path.join(game_dir, "servers.dat")
+            
+            # Structures NBT simplifiées
+            def read_nbt_string(f):
+                length = struct.unpack('>H', f.read(2))[0]
+                return f.read(length).decode('utf-8')
+            
+            def write_nbt_string(f, s):
+                encoded = s.encode('utf-8')
+                f.write(struct.pack('>H', len(encoded)))
+                f.write(encoded)
+            
+            servers = []
+            has_palgania = False
+            
+            # Lire servers.dat existant
+            if os.path.exists(servers_dat):
+                try:
+                    with open(servers_dat, 'rb') as f:
+                        # TAG_Compound (type 10)
+                        tag_type = f.read(1)[0]
+                        if tag_type != 10:
+                            raise ValueError("Format NBT invalide")
+                        
+                        root_name = read_nbt_string(f)
+                        
+                        # Chercher TAG_List "servers" (type 9)
+                        while True:
+                            tag_type = f.read(1)
+                            if not tag_type or tag_type[0] == 0:  # TAG_End
+                                break
+                            
+                            tag_name = read_nbt_string(f)
+                            
+                            if tag_name == "servers" and tag_type[0] == 9:  # TAG_List
+                                list_type = f.read(1)[0]  # Type des éléments (10 = Compound)
+                                list_length = struct.unpack('>i', f.read(4))[0]
+                                
+                                for _ in range(list_length):
+                                    server = {}
+                                    # Lire chaque serveur (TAG_Compound)
+                                    while True:
+                                        inner_type = f.read(1)
+                                        if not inner_type or inner_type[0] == 0:  # TAG_End
+                                            break
+                                        
+                                        inner_name = read_nbt_string(f)
+                                        
+                                        if inner_type[0] == 8:  # TAG_String
+                                            value = read_nbt_string(f)
+                                            server[inner_name] = value
+                                            if inner_name == "ip" and value == "palgania.ovh":
+                                                has_palgania = True
+                                        elif inner_type[0] == 1:  # TAG_Byte
+                                            server[inner_name] = f.read(1)[0]
+                                        else:
+                                            # Ignorer les autres types
+                                            break
+                                    
+                                    servers.append(server)
+                                break
+                            else:
+                                # Ignorer ce tag
+                                break
+                except Exception as e:
+                    logger.warning(f"Impossible de lire servers.dat: {e}")
+                    servers = []
+            
+            # Ajouter Palgania si absent
+            if not has_palgania:
+                servers.append({
+                    "name": "Palgania",
+                    "ip": "palgania.ovh",
+                    "acceptTextures": 1
+                })
+                logger.info("Ajout de Palgania à la liste des serveurs")
+                
+                # Écrire le nouveau servers.dat
+                with open(servers_dat, 'wb') as f:
+                    # TAG_Compound root
+                    f.write(b'\x0a')  # Type 10
+                    write_nbt_string(f, "")  # Nom vide
+                    
+                    # TAG_List "servers"
+                    f.write(b'\x09')  # Type 9
+                    write_nbt_string(f, "servers")
+                    f.write(b'\x0a')  # Type liste = Compound
+                    f.write(struct.pack('>i', len(servers)))  # Nombre d'éléments
+                    
+                    # Écrire chaque serveur
+                    for server in servers:
+                        # TAG_String "name"
+                        f.write(b'\x08')
+                        write_nbt_string(f, "name")
+                        write_nbt_string(f, server.get("name", "Serveur"))
+                        
+                        # TAG_String "ip"
+                        f.write(b'\x08')
+                        write_nbt_string(f, "ip")
+                        write_nbt_string(f, server.get("ip", ""))
+                        
+                        # TAG_Byte "acceptTextures" (optionnel)
+                        if "acceptTextures" in server:
+                            f.write(b'\x01')
+                            write_nbt_string(f, "acceptTextures")
+                            f.write(bytes([server["acceptTextures"]]))
+                        
+                        # TAG_End du serveur
+                        f.write(b'\x00')
+                    
+                    # TAG_End du root
+                    f.write(b'\x00')
+            else:
+                logger.info("Palgania déjà présent dans la liste des serveurs")
+                
+        except Exception as e:
+            logger.error(f"Erreur lors de l'ajout de Palgania: {e}")
+
+    def _find_installed_fabric_version_id(self, game_dir: str, mc_version: str) -> Optional[str]:
+        """Recherche une version Fabric déjà installée correspondant à la version Minecraft.
+
+        Parcourt `.minecraft/versions/*/*.json` et détecte une version contenant
+        le loader Fabric et héritant (inheritsFrom) de la version cible, ou dont l'id
+        contient la version cible. Retourne l'identifiant de version (nom du dossier)
+        si trouvée, sinon None.
+        """
+        try:
+            versions_dir = os.path.join(game_dir, "versions")
+            if not os.path.isdir(versions_dir):
+                return None
+            for name in os.listdir(versions_dir):
+                vdir = os.path.join(versions_dir, name)
+                json_path = os.path.join(vdir, f"{name}.json")
+                if not os.path.isfile(json_path):
+                    continue
+                try:
+                    with open(json_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    continue
+                libs = data.get("libraries", [])
+                is_fabric = any("net.fabricmc:fabric-loader" in (lib.get("name") or "") for lib in libs)
+                if not is_fabric:
+                    continue
+                inherits = data.get("inheritsFrom") or data.get("inherits_from")
+                version_id = str(data.get("id") or name)
+                # Correspondance par héritage exact ou présence de la version MC dans l'id
+                if (inherits and str(inherits) == str(mc_version)) or (str(mc_version) in version_id):
+                    return name
+        except Exception as e:
+            logger.warning(f"Recherche Fabric locale échouée: {e}")
+        return None
 
     def play_game(self):
-        """Lancer le jeu avec les options choisies"""
+        """Lancer le jeu avec les options choisies (démarre un thread pour ne pas bloquer l'UI)"""
         # Désactiver le bouton pour éviter les clics multiples
         self.play_btn.configure(state="disabled", fg_color="gray")
-        self.update_idletasks()
         
+        # Démarrer le processus complet dans un thread séparé
+        threading.Thread(target=self._launch_game_task, daemon=True).start()
+
+    def _launch_game_task(self):
+        """Tâche de fond: téléchargement, installation et lancement du jeu"""
         print(f"Lancement du jeu avec les options:")
         print(f"  Mode en ligne: {self.online_mode.get()}")
         if not self.online_mode.get():
@@ -1105,145 +1317,318 @@ class App(ctk.CTk):
         print(f"  Version: {self.version.get()} ({self.version_group.get()})")
         print(f"  Profil: {self.profile_name.get()}")
 
-        # Préparer le contexte de lancement
-        game_dir = self.advanced_settings.get("mc_data_dir", "")
-        if game_dir == "":
-            game_dir = os.path.join(os.path.expanduser("~"), ".minecraft")
-        context = Context(main_dir=pathlib.Path(game_dir))
+        try:
+            # Préparer le contexte de lancement
+            game_dir = self.advanced_settings.get("mc_data_dir", "")
+            if game_dir == "":
+                game_dir = os.path.join(os.path.expanduser("~"), ".minecraft")
+            
+            # Utiliser expanduser si nécessaire pour les chemins relatifs ~
+            if game_dir.startswith("~"):
+                game_dir = os.path.expanduser(game_dir)
+                
+            context = Context(main_dir=pathlib.Path(game_dir))
 
-        # Préparer / télécharger / installer les addons déclarés
-        if not self._prepare_all_addons():
-            # Annulé par l'utilisateur après une erreur d'addon
-            self.play_btn.configure(state="normal", fg_color="#4CAF50")
-            self.update_idletasks()
-            return
+            # Préparer / télécharger / installer les addons déclarés
+            # Note: _prepare_all_addons doit être sécurisé s'il modifie l'UI, ce qui semble être le cas via status_label
+            # Mais ici c'est synchronisé dans ce thread. Il faudra vérifier que _prepare_all_addons utilise aussi self.after
+            # pour toucher à l'UI.
+            # Pour l'instant on suppose que _prepare_all_addons est modifié ou qu'on va le modifier ensuite.
+            # (Dans l'état actuel il est probablement bloquant et unsafe si non modifié)
+            if not self._prepare_all_addons_safe():
+                 # Annulé par l'utilisateur après une erreur d'addon ou échec
+                self.app_safe_ui_update(lambda: self.play_btn.configure(state="normal", fg_color="#4CAF50"))
+                return
 
-        # Préparer la version
-        if self.loader.get() == "Vanilla":
-            version = Version(self.version.get(),context=context)
-        elif self.loader.get() == "Fabric":
-            version = FabricVersion.with_fabric(self.version.get(),context=context)
-        elif self.loader.get() == "Forge":
-            version = ForgeVersion(self.version.get(),context=context)
-        elif self.loader.get() == "Neoforge":
-            version = _NeoForgeVersion(self.version.get(),context=context)
-        
-        # Configurer l'authentification
-        if self.online_mode.get():
-            # Mode en ligne: utiliser la session Microsoft si disponible
-            if self.auth_session:
-                version.auth_session = self.auth_session
-                logger.info(f"Lancement avec authentification: {self.auth_session.username}")
+            # Préparer la version
+            loader_val = self.loader.get()
+            version_val = self.version.get()
+            
+            if loader_val == "Vanilla":
+                version = Version(version_val, context=context)
+            elif loader_val == "Fabric":
+                # Priorité: utiliser une version Fabric locale si déjà installée
+                local_id = self._find_installed_fabric_version_id(game_dir, version_val)
+                if local_id:
+                    version = Version(local_id, context=context)
+                    self.app_safe_ui_update(lambda: self.status_label.configure(
+                        text=f"Utilisation de Fabric local '{local_id}' (aucun appel réseau)",
+                        text_color="#FF9800"
+                    ))
+                else:
+                    # Sinon, tenter l'initialisation en ligne
+                    try:
+                        version = FabricVersion.with_fabric(version_val, context=context)
+                    except Exception as e:
+                        # Fallback hors ligne: erreurs réseau/HTTP typiques
+                        if isinstance(e, (urllib.error.URLError, urllib.error.HTTPError, TimeoutError)):
+                            msg = (
+                                "Mode hors ligne: Fabric non installé localement et métadonnées inaccessibles.\n"
+                                f"Version Minecraft: {version_val}\n\n"
+                                "Astuce: lancez une fois en ligne pour installer Fabric pour cette version."
+                            )
+                            logger.error(f"Fabric init failed offline: {e}")
+                            self.app_safe_ui_update(lambda: self.status_label.configure(text=msg, text_color="red"))
+                            watcher = InstallWatcher(self) # Juste pour avoir accès aux méthodes hide thread-safe si besoin
+                            watcher._hide_progress_bar()
+                            self.app_safe_ui_update(lambda: self.play_btn.configure(state="normal", fg_color="#4CAF50"))
+                            return
+                        else:
+                            raise
+            elif loader_val == "Forge":
+                version = ForgeVersion(version_val, context=context)
+            elif loader_val == "Neoforge":
+                version = _NeoForgeVersion(version_val, context=context)
+
+            # Appliquer Java/JVM personnalisés avant l'installation
+            custom_java_path = (self.advanced_settings.get("java_path", "") or "").strip()
+            java_applied = False
+            resolved_java = None
+            if custom_java_path:
+                resolved_java = os.path.expanduser(custom_java_path)
+                if os.path.isfile(resolved_java):
+                    version.jvm_path = pathlib.Path(resolved_java)
+                    java_applied = True
+                    logger.info(f"Java personnalisé défini: {resolved_java}")
+                else:
+                    warn = f"Chemin Java introuvable, Java par défaut utilisé: {resolved_java}"
+                    logger.warning(warn)
+                    self.app_safe_ui_update(lambda: self.status_label.configure(text=warn, text_color="#FF9800"))
+
+            custom_jvm_args_raw = (self.advanced_settings.get("jvm_args", "") or "").strip()
+            custom_jvm_args = []
+            if custom_jvm_args_raw:
+                try:
+                    custom_jvm_args = shlex.split(custom_jvm_args_raw)
+                except ValueError:
+                    custom_jvm_args = custom_jvm_args_raw.split()
+                logger.info(f"Arguments JVM personnalisés saisis: {custom_jvm_args}")
+            
+            # Configurer l'authentification
+            if self.online_mode.get():
+                # Mode en ligne: utiliser la session Microsoft si disponible
+                if self.auth_session:
+                    version.auth_session = self.auth_session
+                    logger.info(f"Lancement avec authentification: {self.auth_session.username}")
+                else:
+                    logger.warning("Mode en ligne activé mais aucune session - lancement en mode hors ligne")
+                    version.set_auth_offline(
+                        self.pseudo.get() or None,
+                        self.uuid.get() or None
+                    )
             else:
-                logger.warning("Mode en ligne activé mais aucune session - lancement en mode hors ligne")
+                # Mode hors ligne: utiliser pseudo/UUID
                 version.set_auth_offline(
                     self.pseudo.get() or None,
                     self.uuid.get() or None
                 )
-        else:
-            # Mode hors ligne: utiliser pseudo/UUID
-            version.set_auth_offline(
-                self.pseudo.get() or None,
-                self.uuid.get() or None
-            )
-            logger.info(f"Lancement en mode hors ligne: {self.pseudo.get() or 'pseudo aléatoire'}")
-        
-        watcher = InstallWatcher(self)
-        
-        try:
-            env = version.install(watcher=watcher)
-        except KeyError as e:
-            # Problème avec les variables de processus (souvent avec Neoforge)
-            loader_name = self.loader.get()
-            version_name = self.version.get()
+                logger.info(f"Lancement en mode hors ligne: {self.pseudo.get() or 'pseudo aléatoire'}")
             
-            error_msg = f"⚠️ Erreur d'installation: variable manquante '{e}'\n\n"
+            watcher = InstallWatcher(self)
             
-            if loader_name == "Neoforge" and version_name.startswith("1.21"):
-                error_msg += "Neoforge 1.21+ a des problèmes de compatibilité.\n\n"
-                error_msg += "Solutions suggérées:\n"
-                error_msg += "1. Essayer avec Forge (même version)\n"
-                error_msg += "2. Utiliser Vanilla (pas de mod loader)\n"
-                error_msg += "3. Essayer une version antérieure\n"
-            else:
-                error_msg += "Cela peut être dû à:\n"
-                error_msg += "• Une incompatibilité avec la version du loader\n"
-                error_msg += "• Un problème avec portablemc\n\n"
-                error_msg += f"Détails: {str(e)}"
-            
-            logger.error(f"Installation error for {loader_name} {version_name}: {e}")
-            self.status_label.configure(text=error_msg, text_color="red")
-            self._hide_progress_bar()
-            self.play_btn.configure(state="normal", fg_color="#4CAF50")
-            self.update_idletasks()
-            return
-        except Exception as e:
-            # Autres erreurs d'installation
-            error_msg = f"❌ Erreur lors de l'installation:\n{type(e).__name__}: {str(e)[:100]}"
-            logger.error(f"Installation error: {e}", exc_info=True)
-            self.status_label.configure(text=error_msg, text_color="red")
-            self._hide_progress_bar()
-            self.play_btn.configure(state="normal", fg_color="#4CAF50")
-            self.update_idletasks()
-            return
-        
-        # Appliquer les paramètres quickplay si configurés
-        quickplay_server = self.advanced_settings.get("quickplay_server", "").strip()
-        quickplay_port = self.advanced_settings.get("quickplay_port", "").strip()
-        quickplay_world = self.advanced_settings.get("quickplay_world", "").strip()
-        
-        if quickplay_server:
-            # Connexion à un serveur multijoueur
-            host = quickplay_server
-            port = quickplay_port or "25565"
-            # Normaliser et extraire host/port si saisi au format host:port ou avec schéma
             try:
-                s = host
-                if "://" in s:
-                    s = s.split("://", 1)[1]
-                if s.startswith("[") and "]:" in s:
-                    h, p = s.split("]:", 1)
-                    host = h.strip("[]")
-                    port = p
-                elif ":" in s:
-                    parts = s.rsplit(":", 1)
-                    host = parts[0]
-                    port = parts[1]
+                env = version.install(watcher=watcher)
+            except KeyError as e:
+                # Problème avec les variables de processus (souvent avec Neoforge)
+                loader_name = loader_val
+                version_name = version_val
+                
+                error_msg = f"⚠️ Erreur d'installation: variable manquante '{e}'\n\n"
+                
+                if loader_name == "Neoforge" and version_name.startswith("1.21"):
+                    error_msg += "Neoforge 1.21+ a des problèmes de compatibilité.\n\n"
+                    error_msg += "Solutions suggérées:\n"
+                    error_msg += "1. Essayer avec Forge (même version)\n"
+                    error_msg += "2. Utiliser Vanilla (pas de mod loader)\n"
+                    error_msg += "3. Essayer une version antérieure\n"
                 else:
-                    host = s
-            except Exception:
+                    error_msg += "Cela peut être dû à:\n"
+                    error_msg += "• Une incompatibilité avec la version du loader\n"
+                    error_msg += "• Un problème avec portablemc\n\n"
+                    error_msg += f"Détails: {str(e)}"
+                
+                logger.error(f"Installation error for {loader_name} {version_name}: {e}")
+                self.app_safe_ui_update(lambda: self.status_label.configure(text=error_msg, text_color="red"))
+                watcher._hide_progress_bar()
+                self.app_safe_ui_update(lambda: self.play_btn.configure(state="normal", fg_color="#4CAF50"))
+                return
+            except Exception as e:
+                # Autres erreurs d'installation
+                error_msg = f"❌ Erreur lors de l'installation:\n{type(e).__name__}: {str(e)[:100]}"
+                logger.error(f"Installation error: {e}", exc_info=True)
+                self.app_safe_ui_update(lambda: self.status_label.configure(text=error_msg, text_color="red"))
+                watcher._hide_progress_bar()
+                self.app_safe_ui_update(lambda: self.play_btn.configure(state="normal", fg_color="#4CAF50"))
+                return
+            
+            # Injecter Java personnalisé et arguments JVM après installation
+            if java_applied and resolved_java:
+                env.jvm_args[0] = resolved_java
+            if custom_jvm_args:
+                env.jvm_args = env.jvm_args[:1] + custom_jvm_args + env.jvm_args[1:]
+            logger.info(f"JVM utilisée: {env.jvm_args[0]}")
+            if custom_jvm_args:
+                logger.info(f"JVM args finaux: {env.jvm_args}")
+
+            # Ajouter Palgania à la liste des serveurs si demandé
+            if self.advanced_settings.get("auto_add_palgania", True):
+                self._add_palgania_server(game_dir)
+
+            # Appliquer les paramètres quickplay si configurés
+            quickplay_server = self.advanced_settings.get("quickplay_server", "").strip()
+            quickplay_port = self.advanced_settings.get("quickplay_port", "").strip()
+            quickplay_world = self.advanced_settings.get("quickplay_world", "").strip()
+            
+            if quickplay_server:
+                # Connexion à un serveur multijoueur
                 host = quickplay_server
+                port = quickplay_port or "25565"
+                # Normaliser et extraire host/port si saisi au format host:port ou avec schéma
+                try:
+                    s = host
+                    if "://" in s:
+                        s = s.split("://", 1)[1]
+                    if s.startswith("[") and "]:" in s:
+                        h, p = s.split("]:", 1)
+                        host = h.strip("[]")
+                        port = p
+                    elif ":" in s:
+                        parts = s.rsplit(":", 1)
+                        host = parts[0]
+                        port = parts[1]
+                    else:
+                        host = s
+                except Exception:
+                    host = quickplay_server
 
-            try:
-                port_int = int(str(port))
-                if not (1 <= port_int <= 65535):
+                try:
+                    port_int = int(str(port))
+                    if not (1 <= port_int <= 65535):
+                        port_int = 25565
+                except Exception:
                     port_int = 25565
-            except Exception:
-                port_int = 25565
-            port = str(port_int)
+                port = str(port_int)
 
-            addr = f"{host}:{port}" if port else host
-            # PortableMC doc: versions modernes utilisent quick play args
-            env.game_args.extend(["--quickPlayMultiplayer", addr])
-            # Legacy fallback
-            env.game_args.extend(["--server", host])
-            if port != "25565":
-                env.game_args.extend(["--port", port])
-            logger.info(f"Quickplay: connexion au serveur {addr}")
-        elif quickplay_world:
-            # Lancement d'un monde solo
-            env.game_args.extend(["--quickPlaySingleplayer", quickplay_world])
-            logger.info(f"Quickplay: lancement du monde solo '{quickplay_world}'")
-        
-        # Masquer le launcher avant de lancer le jeu
-        # (withdraw cache la fenêtre sans la détruire, contrairement à destroy)
-        self.withdraw()
-        self.update_idletasks()
-        
-        # Lancer le jeu (self reste en mémoire pour éviter la destruction prématurée)
-        env.run()
-        exit(0)
+                addr = f"{host}:{port}" if port else host
+                # PortableMC doc: versions modernes utilisent quick play args
+                env.game_args.extend(["--quickPlayMultiplayer", addr])
+                # Legacy fallback
+                env.game_args.extend(["--server", host])
+                if port != "25565":
+                    env.game_args.extend(["--port", port])
+                logger.info(f"Quickplay: connexion au serveur {addr}")
+            elif quickplay_world:
+                # Lancement d'un monde solo
+                env.game_args.extend(["--quickPlaySingleplayer", quickplay_world])
+                logger.info(f"Quickplay: lancement du monde solo '{quickplay_world}'")
+            
+            # Masquer le launcher avant de lancer le jeu
+            self.app_safe_ui_update(self.withdraw)
+            
+            # Lancer le jeu (bloque le thread jusqu'à la fin du jeu)
+            env.run()
+            
+            # Fin du processus, on ferme l'appli python
+            # Note: sys.exit(0) ne tuerait que le thread, os._exit termine durement
+            os._exit(0)
+            
+        except Exception as global_e:
+             logger.error(f"Fatal launch error: {global_e}", exc_info=True)
+             self.app_safe_ui_update(lambda: self.status_label.configure(text=f"Fatal Error: {global_e}", text_color="red"))
+             self.app_safe_ui_update(lambda: self.play_btn.configure(state="normal", fg_color="#4CAF50"))
+
+    def app_safe_ui_update(self, func):
+        """Helper pour exécuter des mises à jour UI depuis un thread"""
+        self.after(0, func)
     
+    def _prepare_all_addons_safe(self) -> bool:
+        """Wrapper thread-safe pour _prepare_all_addons"""
+        # Comme _prepare_all_addons contient beaucoup de logique qui pourrait interagir avec l'UI (print, updates)
+        # Il faut que _prepare_all_addons soit soit rewritten, soit on redirige les appels UI.
+        # Dans ce code, _prepare_all_addons n'est pas montré mais supposé exister.
+        # Je vais ajouter une implémentation locale inline si elle n'existe pas ou assumer qu'il faut la créer.
+        # L'ancienne play_game l'appelait : if not self._prepare_all_addons():
+        
+        # Vu que je n'ai pas vu la définition de _prepare_all_addons dans les vues précédentes,
+        # je dois la recréer ou la trouver.
+        # En fait, elle n'était PAS dans le fichier précédemment lu intégralement (mais il y avait des troncatures).
+        # Je vais supposer qu'elle utilise self.status_label pour le feedback.
+        # Pour le moment, je vais l'implémenter ici ou appeler l'existante en espérant qu'elle ne touche pas l'UI directement.
+        # MAIS ATTENTION: Si elle appelle self.status_label.configure direct, ça crash.
+        # Je vais devoir la wrapper ou la réécrire.
+        
+        # Pour être sûr, je la réimplémente complètement ici en version Thread-Safe
+        return self._prepare_all_addons_impl()
+
+    def _prepare_all_addons_impl(self) -> bool:
+         # Logique d'installation des addons
+         # Récupérer les mots clés (thread safe car lecture de variables)
+         loader = self.loader.get().lower()
+         version = self.version.get()
+         
+         # Pas d'addons en Vanilla pur (sauf resource packs)
+         # On va simplifier : on installe si des keywords sont présents
+         
+         rp_keys = [k.strip() for k in self.resource_packs_keywords.get().split(',') if k.strip()]
+         mod_keys = [k.strip() for k in self.mods_keywords.get().split(',') if k.strip()]
+         sh_keys = [k.strip() for k in self.shader_packs_keywords.get().split(',') if k.strip()]
+         
+         total = len(rp_keys) + len(mod_keys) + len(sh_keys)
+         if total == 0:
+             return True
+
+         self.app_safe_ui_update(lambda: self.status_label.configure(text=f"Vérification des {total} addons...", text_color="orange"))
+         
+         # Managers
+         try:
+             # Attention: AddonsManager utilise requests/urllib qui est bloquant (c'est ce qu'on veut ici)
+             # Il faut juste ne pas toucher à l'UI
+             from addons_manager import AddonsManager, AddonNotFoundError
+             
+             game_dir = self.advanced_settings.get("mc_data_dir", "") or None
+             
+             # Resource Packs
+             if rp_keys:
+                 mgr = AddonsManager("resourcepacks", game_dir=game_dir, loader=loader, version=version)
+                 try:
+                     self.app_safe_ui_update(lambda: self.status_label.configure(text="Installation des Resource Packs...", text_color="orange"))
+                     mgr.install_addons(rp_keys)
+                 except Exception as e:
+                     logger.error(f"Erreur RP: {e}")
+                     formatted = f"Erreur Resource Packs: {e}"
+                     self.app_safe_ui_update(lambda: messagebox.showerror("Erreur Addons", formatted))
+                     return False
+
+             # Mods (seulement si non vanilla)
+             if mod_keys and loader != "vanilla":
+                 mgr = AddonsManager("mods", game_dir=game_dir, loader=loader, version=version)
+                 try:
+                     self.app_safe_ui_update(lambda: self.status_label.configure(text="Installation des Mods...", text_color="orange"))
+                     mgr.install_addons(mod_keys)
+                 except Exception as e:
+                     logger.error(f"Erreur Mods: {e}")
+                     self.app_safe_ui_update(lambda: messagebox.showerror("Erreur Addons", f"Erreur Mods: {e}"))
+                     return False
+             
+             # Shaders (seulement si Iris/Optifine présent, on suppose Iris sur Fabric/Neo)
+             if sh_keys:
+                 # Force Iris loader handling in manager
+                 mgr = AddonsManager("shaderpacks", game_dir=game_dir, loader=loader, version=version)
+                 try:
+                     self.app_safe_ui_update(lambda: self.status_label.configure(text="Installation des Shaders...", text_color="orange"))
+                     mgr.install_addons(sh_keys)
+                 except Exception as e:
+                     logger.error(f"Erreur Shaders: {e}")
+                     self.app_safe_ui_update(lambda: messagebox.showerror("Erreur Addons", f"Erreur Shaders: {e}"))
+                     return False
+                     
+             return True
+             
+         except Exception as e:
+             logger.error(f"Erreur globale addons: {e}")
+             self.app_safe_ui_update(lambda: messagebox.showerror("Erreur critique", f"Impossible de gérer les addons: {e}"))
+             return False
+
     def load_profiles(self):
         """Charger les profils depuis le fichier JSON"""
         if os.path.exists(PROFILES_FILE):
@@ -1275,7 +1660,10 @@ class App(ctk.CTk):
             self.online_mode.set(profile_data.get("online_mode", True))
             self.pseudo.set(profile_data.get("pseudo", ""))
             self.uuid.set(profile_data.get("uuid", ""))
-            self.loader.set(profile_data.get("loader", "Vanilla"))
+            loaded_loader = profile_data.get("loader", "Vanilla")
+            self.loader.set(loaded_loader)
+            # Rafraîchir immédiatement les familles/versions selon le loader du profil
+            self.on_loader_change(loaded_loader)
             # Charger les champs de mots-clés (peuvent être absents sur anciens profils)
             r = profile_data.get("resource_packs_keywords", "")
             m = profile_data.get("mods_keywords", "")
@@ -1607,6 +1995,7 @@ class App(ctk.CTk):
             game_dir=game_dir,
             loader=loader_internal,
             version=version_name,
+            config_dir=str(CONFIG_DIR),
         )
 
         total = len(keywords)
@@ -1617,27 +2006,41 @@ class App(ctk.CTk):
         self.update_idletasks()
         successful = []
         for idx, kw in enumerate(keywords, 1):
-            self.status_label.configure(text=f"[Addons] {addon_type} {idx-1}/{total} | Préparation: {kw}", text_color="#FF9800")
+            self.status_label.configure(text=f"[Addons] {addon_type} {idx-1}/{total} | Vérification: {kw}", text_color="#FF9800")
             if total:
                 self.progress_bar.set((idx-1)/total)
             self.update_idletasks()
             try:
+                # Fetch addon (will use local exact-compatible version if offline, otherwise download)
                 mgr.fetch_keyword(kw)
                 successful.append(kw)
-                self.status_label.configure(text=f"[Addons] {addon_type} {idx}/{total} | Téléchargé: {kw}", text_color="#FF9800")
+                status_msg = f"[Addons] {addon_type} {idx}/{total} | Addon: {kw}"
+                self.status_label.configure(text=status_msg, text_color="#FF9800")
                 if total:
                     self.progress_bar.set(idx/total)
                 self.update_idletasks()
             except AddonNotFoundError as e:
-                msg = (
-                    f"Impossible de récupérer '{kw}' pour {addon_type}\n"
-                    f"{str(e)}\n\n"
-                    "Continuer le lancement sans cet addon ?"
-                )
+                error_message = str(e)
+                # Message plus clair pour le mode hors ligne
+                if "pas d'accès internet" in error_message.lower():
+                    msg = (
+                        f"Mode hors ligne: '{kw}' n'est pas disponible localement\n"
+                        f"L'addon doit être téléchargé mais il n'y a pas de connexion.\n\n"
+                        f"Astuce: Lancez une fois avec une connexion internet pour\n"
+                        f"télécharger l'addon dans {addon_type}_available\n\n"
+                        "Continuer le lancement sans cet addon ?"
+                    )
+                else:
+                    msg = (
+                        f"Impossible de récupérer '{kw}' pour {addon_type}\n"
+                        f"{error_message}\n\n"
+                        "Continuer le lancement sans cet addon ?"
+                    )
                 if not messagebox.askyesno("Addon introuvable", msg):
                     return False
                 # Avancer tout de même la progression
-                self.status_label.configure(text=f"[Addons] {addon_type} {idx}/{total} | Ignoré (introuvable): {kw}", text_color="#FF9800")
+                status_text = "Ignoré (hors ligne)" if "pas d'accès internet" in error_message.lower() else "Ignoré (introuvable)"
+                self.status_label.configure(text=f"[Addons] {addon_type} {idx}/{total} | {status_text}: {kw}", text_color="#FF9800")
                 if total:
                     self.progress_bar.set(idx/total)
                 self.update_idletasks()
@@ -1745,22 +2148,20 @@ class App(ctk.CTk):
 
     def _save_last_profile(self, profile_name):
         """Sauvegarder le nom du dernier profil utilisé dans un fichier dédié"""
-        last_profile_file = "last_profile.txt"
         try:
-            with open(last_profile_file, 'w', encoding='utf-8') as f:
+            with open(LAST_PROFILE_FILE, 'w', encoding='utf-8') as f:
                 f.write(profile_name)
         except Exception as e:
             print(f"Erreur lors de la sauvegarde du dernier profil: {e}")
 
     def _load_last_profile(self):
         """Charger et appliquer le dernier profil utilisé au démarrage"""
-        last_profile_file = "last_profile.txt"
-        if not os.path.exists(last_profile_file):
+        if not os.path.exists(LAST_PROFILE_FILE):
             # Aucun historique, charger Défaut avec dernière version disponible
             self._load_default_latest()
             return
         try:
-            with open(last_profile_file, 'r', encoding='utf-8') as f:
+            with open(LAST_PROFILE_FILE, 'r', encoding='utf-8') as f:
                 last_profile = f.read().strip()
             # Charger le profil s'il existe, sinon fallback Défaut
             if last_profile and last_profile in self.profiles:

@@ -2,6 +2,7 @@ import json
 import os
 import urllib.request
 import threading
+import re
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Tuple, Optional, Any
 from pathlib import Path
@@ -11,7 +12,35 @@ FABRIC_API_URL = "https://meta.fabricmc.net/v2/versions"
 FORGE_MAVEN_URL = "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml"
 NEOFORGE_MAVEN_URL = "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml"
 
-CACHE_FILE = "versions_cache.json"
+def _default_config_dir() -> Path:
+    system = os.name
+    home = Path.home()
+    if system == 'nt':
+        return home / "AppData/Local/palgania_launcher"
+    # Use platform.system for Darwin
+    import platform as _platform
+    if _platform.system().lower() == 'darwin':
+        return home / "Library/Application Support/palgania_launcher"
+    return home / ".palgania_launcher"
+
+def _get_config_dir() -> Path:
+    env_path = os.environ.get("PALGANIA_LAUNCHER_CONFIG_DIR")
+    if env_path:
+        p = Path(env_path).expanduser()
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return p
+    p = _default_config_dir()
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return p
+
+def _cache_file_path() -> Path:
+    return _get_config_dir() / "versions_cache.json"
 
 # Fallback versions per loader
 FALLBACK_GROUPS = {
@@ -225,13 +254,25 @@ def fetch_neoforge_versions(manifest: Dict) -> Dict[str, List[str]]:
 
 
 def _parse_version_tuple(version_str: str) -> Tuple[int, int, int]:
-    """Parse a version string like '1.21.11' into a comparable tuple (1, 21, 11)"""
+    """Parse a version string like '1.21.11' or '24w45a' into a comparable tuple"""
+    # Check for snapshot format: YYwWWx (e.g. 24w45a -> Year 24, Week 45, rev a)
+    snapshot_match = re.match(r'^(\d{2})w(\d{2})([a-z])$', version_str)
+    if snapshot_match:
+        year = int(snapshot_match.group(1))
+        week = int(snapshot_match.group(2))
+        rev = ord(snapshot_match.group(3))
+        # Ensure snapshots (year ~24) are semantically distinguishable from releases (major 1)
+        # Using the year as major version works for sorting snapshots amongst themselves,
+        # but be careful if mixing with releases.
+        return (year, week, rev)
+    
     try:
+        # Standard SemVer behavior
         # Remove any suffixes like '-pre', '-rc', etc. and just get the numeric parts
-        parts = version_str.split('.')
+        parts = version_str.split('-')[0].split('.')
         major = int(parts[0]) if len(parts) > 0 else 0
         minor = int(parts[1]) if len(parts) > 1 else 0
-        patch = int(parts[2].split('-')[0]) if len(parts) > 2 else 0
+        patch = int(parts[2]) if len(parts) > 2 else 0
         return (major, minor, patch)
     except (ValueError, IndexError):
         # Fallback for non-standard versions
@@ -247,9 +288,10 @@ def fetch_manifest() -> Dict:
 
 def load_cache() -> Dict[str, Any]:
     """Load cached versions for all loaders"""
-    if os.path.exists(CACHE_FILE):
+    cache_path = _cache_file_path()
+    if cache_path.exists():
         try:
-            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+            with open(cache_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception:
             return {}
@@ -259,7 +301,8 @@ def load_cache() -> Dict[str, Any]:
 def save_cache(cache: Dict[str, Any]):
     """Save versions cache to file"""
     try:
-        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+        cache_path = _cache_file_path()
+        with open(cache_path, 'w', encoding='utf-8') as f:
             json.dump(cache, f, indent=2, ensure_ascii=False)
     except Exception:
         pass
