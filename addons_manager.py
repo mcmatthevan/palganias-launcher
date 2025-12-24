@@ -317,6 +317,6 @@ class AddonsManager:
             if temp_install_dir.exists():
                 shutil.rmtree(temp_install_dir, ignore_errors=True)
 
-am = AddonsManager(addon_type="mods",loader="fabric",version="1.21.11")
-bm = AddonsManager(addon_type="resourcepacks",version="1.21.11")
-cm = AddonsManager(addon_type="shaderpacks",version="1.21.11")
+# am = AddonsManager(addon_type="mods",loader="fabric",version="1.21.11")
+# bm = AddonsManager(addon_type="resourcepacks",version="1.21.11")
+# cm = AddonsManager(addon_type="shaderpacks",version="1.21.11")
