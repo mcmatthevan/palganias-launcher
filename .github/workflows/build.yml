@@ -30,13 +30,13 @@ jobs:
             platform: Linux
             artifact-name: PalganiasLauncher-linux
             
-          # - os: windows-latest
-          #   platform: Windows
-          #   artifact-name: PalganiasLauncher-windows.exe
+          - os: windows-latest
+            platform: Windows
+            artifact-name: PalganiasLauncher-windows.exe
             
-          # - os: macos-15
-          #   platform: macOS
-          #   artifact-name: PalganiasLauncher-macos
+          - os: macos-15
+            platform: macOS
+            artifact-name: PalganiasLauncher-macos
 
     permissions:
       contents: read
@@ -59,27 +59,38 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt pyinstaller
 
-      # - name: Build Windows executable
-      #   if: runner.os == 'Windows'
-      #   shell: pwsh
-      #   run: |
-      #     $customtkinterPath = python -c "import customtkinter; print(customtkinter.__path__[0])"
+      - name: Build Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force build/, dist/, *.spec -ErrorAction SilentlyContinue
+          $env:PYTHONIOENCODING="utf-8"
           
-      #     pyinstaller --noconfirm `
-      #       --onefile `
-      #       --windowed `
-      #       --name "PalganiasLauncher" `
-      #       --add-data "$customtkinterPath;customtkinter/" `
-      #       --add-data "logo128x128.png;." `
-      #       --icon "logo128x128.png" `
-      #       --hidden-import "PIL._tkinter_finder" `
-      #       --hidden-import "addons_manager" `
-      #       --hidden-import "versions" `
-      #       --collect-all "portablemc" `
-      #       main.py
+          pip uninstall -y Pillow
+          pip install Pillow==10.4.0
           
-      #     # Rename to standard format
-      #     Rename-Item -Path "dist/PalganiasLauncher.exe" -NewName "${{ matrix.artifact-name }}"
+          $customtkinterPath = python -c "import customtkinter; print(customtkinter.__path__[0])"
+          
+          pyinstaller --noconfirm --clean `
+            --onefile `
+            --windowed `
+            --name "PalganiasLauncher" `
+            --add-data "${customtkinterPath};customtkinter/" `
+            --add-data "logo128x128.png;." `
+            --add-data "addons_manager.py;." `
+            --add-data "versions.py;." `
+            --icon "logo128x128.png" `
+            --collect-all "PIL" `
+            --collect-all "customtkinter" `
+            --collect-all "portablemc" `
+            --hidden-import "PIL._tkinter_finder" `
+            --hidden-import "PIL.ImageTk" `
+            --hidden-import "tkinter" `
+            --hidden-import "addons_manager" `
+            --hidden-import "versions" `
+            main.py
+          
+          Rename-Item -Path "dist/PalganiasLauncher.exe" -NewName "${{ matrix.artifact-name }}"
 
       - name: Build Linux executable
         if: runner.os == 'Linux'
@@ -115,28 +126,38 @@ jobs:
           mv dist/PalganiasLauncher dist/${{ matrix.artifact-name }}
           chmod +x dist/${{ matrix.artifact-name }}
 
-      # - name: Build macOS executable
-      #   if: runner.os == 'macOS'
-      #   run: |
-      #     CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
+      - name: Build macOS executable
+        if: runner.os == 'macOS'
+        run: |
+          rm -rf build/ dist/ *.spec
+          export PYTHONIOENCODING=utf-8
           
-      #     # Build for native architecture only (arm64 on modern runners)
-      #     pyinstaller --noconfirm \
-      #       --onefile \
-      #       --windowed \
-      #       --name "PalganiasLauncher" \
-      #       --add-data "$CUSTOMTKINTER_PATH:customtkinter/" \
-      #       --add-data "logo128x128.png:." \
-      #       --icon "logo128x128.png" \
-      #       --hidden-import "PIL._tkinter_finder" \
-      #       --hidden-import "addons_manager" \
-      #       --hidden-import "versions" \
-      #       --collect-all "portablemc" \
-      #       main.py
+          pip uninstall -y Pillow
+          pip install Pillow==10.4.0
           
-      #     # Rename to standard format
-      #     mv dist/PalganiasLauncher dist/${{ matrix.artifact-name }}
-      #     chmod +x dist/${{ matrix.artifact-name }}
+          CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
+          
+          pyinstaller --noconfirm --clean \
+            --onefile \
+            --windowed \
+            --name "PalganiasLauncher" \
+            --add-data "$CUSTOMTKINTER_PATH:customtkinter/" \
+            --add-data "logo128x128.png:." \
+            --add-data "addons_manager.py:." \
+            --add-data "versions.py:." \
+            --icon "logo128x128.png" \
+            --collect-all "PIL" \
+            --collect-all "customtkinter" \
+            --collect-all "portablemc" \
+            --hidden-import "PIL._tkinter_finder" \
+            --hidden-import "PIL.ImageTk" \
+            --hidden-import "tkinter" \
+            --hidden-import "addons_manager" \
+            --hidden-import "versions" \
+            main.py
+          
+          mv dist/PalganiasLauncher dist/${{ matrix.artifact-name }}
+          chmod +x dist/${{ matrix.artifact-name }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
