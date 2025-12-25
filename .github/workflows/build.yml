@@ -30,13 +30,13 @@ jobs:
             platform: Linux
             artifact-name: PalganiasLauncher-linux
             
-          - os: windows-latest
-            platform: Windows
-            artifact-name: PalganiasLauncher-windows.exe
+          # - os: windows-latest
+          #   platform: Windows
+          #   artifact-name: PalganiasLauncher-windows.exe
             
-          - os: macos-15
-            platform: macOS
-            artifact-name: PalganiasLauncher-macos
+          # - os: macos-15
+          #   platform: macOS
+          #   artifact-name: PalganiasLauncher-macos
 
     permissions:
       contents: read
