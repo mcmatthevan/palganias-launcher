@@ -3,13 +3,6 @@ import json
 import os
 import sys
 from PIL import Image
-
-# Add PyInstaller temp path to sys.path for local modules
-if getattr(sys, 'frozen', False):
-    # Running in PyInstaller bundle
-    bundle_dir = sys._MEIPASS
-    sys.path.insert(0, bundle_dir)
-
 from versions import get_version_groups, refresh_version_groups_async
 from tkinter import filedialog, messagebox
 import shlex

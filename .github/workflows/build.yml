@@ -71,10 +71,10 @@ jobs:
             --name "PalganiasLauncher" `
             --add-data "$customtkinterPath;customtkinter/" `
             --add-data "logo128x128.png;." `
-            --add-data "addons_manager.py;." `
-            --add-data "versions.py;." `
             --icon "logo128x128.png" `
             --hidden-import "PIL._tkinter_finder" `
+            --hidden-import "addons_manager" `
+            --hidden-import "versions" `
             --collect-all "portablemc" `
             main.py
           
@@ -92,10 +92,10 @@ jobs:
             --name "PalganiasLauncher" \
             --add-data "$CUSTOMTKINTER_PATH:customtkinter/" \
             --add-data "logo128x128.png:." \
-            --add-data "addons_manager.py:." \
-            --add-data "versions.py:." \
             --icon "logo128x128.png" \
             --hidden-import "PIL._tkinter_finder" \
+            --hidden-import "addons_manager" \
+            --hidden-import "versions" \
             --collect-all "portablemc" \
             main.py
           
@@ -115,10 +115,10 @@ jobs:
             --name "PalganiasLauncher" \
             --add-data "$CUSTOMTKINTER_PATH:customtkinter/" \
             --add-data "logo128x128.png:." \
-            --add-data "addons_manager.py:." \
-            --add-data "versions.py:." \
             --icon "logo128x128.png" \
             --hidden-import "PIL._tkinter_finder" \
+            --hidden-import "addons_manager" \
+            --hidden-import "versions" \
             --collect-all "portablemc" \
             main.py
           
