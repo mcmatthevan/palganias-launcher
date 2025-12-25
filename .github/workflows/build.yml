@@ -129,13 +129,13 @@ jobs:
       #     mv dist/PalganiasLauncher dist/${{ matrix.artifact-name }}
       #     chmod +x dist/${{ matrix.artifact-name }}
 
-      # - name: Upload build artifacts
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: build-${{ matrix.platform }}
-      #     path: dist/${{ matrix.artifact-name }}
-      #     if-no-files-found: error
-      #     retention-days: 5
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.platform }}
+          path: dist/${{ matrix.artifact-name }}
+          if-no-files-found: error
+          retention-days: 5
 
   create-release:
     name: Create GitHub Release
