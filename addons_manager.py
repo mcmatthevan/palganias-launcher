@@ -161,7 +161,7 @@ class AddonsManager:
             appdata = os.getenv("APPDATA")
             return str(pathlib.Path(appdata) / ".minecraft") if appdata else str(home / "AppData/Roaming/.minecraft")
         if system == "darwin":
-            return str(home / "Library/Application Support/.minecraft")
+            return str(home / "Library/Application Support/minecraft")
         return str(home / ".minecraft")
 
     @staticmethod
