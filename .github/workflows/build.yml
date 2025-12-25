@@ -86,6 +86,11 @@ jobs:
         run: |
           rm -rf build/ dist/ *.spec
           export PYTHONIOENCODING=utf-8
+          
+          # Force installation propre Pillow + tkinter
+          pip uninstall -y Pillow
+          pip install Pillow==10.4.0  # Version stable Ubuntu 24.04
+          
           CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
           
           pyinstaller --noconfirm --clean \
@@ -97,10 +102,15 @@ jobs:
             --add-data "addons_manager.py:." \
             --add-data "versions.py:." \
             --icon "logo128x128.png" \
+            # Modules Pillow/Tkinter complets
+            --collect-all "PIL" \
+            --collect-all "customtkinter" \
+            --collect-all "portablemc" \
+            --hidden-import "PIL._tkinter_finder" \
+            --hidden-import "PIL.ImageTk" \
+            --hidden-import "tkinter" \
             --hidden-import "addons_manager" \
             --hidden-import "versions" \
-            --collect-all "portablemc" \
-            --collect-all "customtkinter" \
             main.py
           
           mv dist/PalganiasLauncher dist/${{ matrix.artifact-name }}
