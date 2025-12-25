@@ -59,27 +59,27 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt pyinstaller
 
-      - name: Build Windows executable
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $customtkinterPath = python -c "import customtkinter; print(customtkinter.__path__[0])"
+      # - name: Build Windows executable
+      #   if: runner.os == 'Windows'
+      #   shell: pwsh
+      #   run: |
+      #     $customtkinterPath = python -c "import customtkinter; print(customtkinter.__path__[0])"
           
-          pyinstaller --noconfirm `
-            --onefile `
-            --windowed `
-            --name "PalganiasLauncher" `
-            --add-data "$customtkinterPath;customtkinter/" `
-            --add-data "logo128x128.png;." `
-            --icon "logo128x128.png" `
-            --hidden-import "PIL._tkinter_finder" `
-            --hidden-import "addons_manager" `
-            --hidden-import "versions" `
-            --collect-all "portablemc" `
-            main.py
+      #     pyinstaller --noconfirm `
+      #       --onefile `
+      #       --windowed `
+      #       --name "PalganiasLauncher" `
+      #       --add-data "$customtkinterPath;customtkinter/" `
+      #       --add-data "logo128x128.png;." `
+      #       --icon "logo128x128.png" `
+      #       --hidden-import "PIL._tkinter_finder" `
+      #       --hidden-import "addons_manager" `
+      #       --hidden-import "versions" `
+      #       --collect-all "portablemc" `
+      #       main.py
           
-          # Rename to standard format
-          Rename-Item -Path "dist/PalganiasLauncher.exe" -NewName "${{ matrix.artifact-name }}"
+      #     # Rename to standard format
+      #     Rename-Item -Path "dist/PalganiasLauncher.exe" -NewName "${{ matrix.artifact-name }}"
 
       - name: Build Linux executable
         if: runner.os == 'Linux'
@@ -106,36 +106,36 @@ jobs:
           mv dist/PalganiasLauncher dist/${{ matrix.artifact-name }}
           chmod +x dist/${{ matrix.artifact-name }}
 
-      - name: Build macOS executable
-        if: runner.os == 'macOS'
-        run: |
-          CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
+      # - name: Build macOS executable
+      #   if: runner.os == 'macOS'
+      #   run: |
+      #     CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
           
-          # Build for native architecture only (arm64 on modern runners)
-          pyinstaller --noconfirm \
-            --onefile \
-            --windowed \
-            --name "PalganiasLauncher" \
-            --add-data "$CUSTOMTKINTER_PATH:customtkinter/" \
-            --add-data "logo128x128.png:." \
-            --icon "logo128x128.png" \
-            --hidden-import "PIL._tkinter_finder" \
-            --hidden-import "addons_manager" \
-            --hidden-import "versions" \
-            --collect-all "portablemc" \
-            main.py
+      #     # Build for native architecture only (arm64 on modern runners)
+      #     pyinstaller --noconfirm \
+      #       --onefile \
+      #       --windowed \
+      #       --name "PalganiasLauncher" \
+      #       --add-data "$CUSTOMTKINTER_PATH:customtkinter/" \
+      #       --add-data "logo128x128.png:." \
+      #       --icon "logo128x128.png" \
+      #       --hidden-import "PIL._tkinter_finder" \
+      #       --hidden-import "addons_manager" \
+      #       --hidden-import "versions" \
+      #       --collect-all "portablemc" \
+      #       main.py
           
-          # Rename to standard format
-          mv dist/PalganiasLauncher dist/${{ matrix.artifact-name }}
-          chmod +x dist/${{ matrix.artifact-name }}
+      #     # Rename to standard format
+      #     mv dist/PalganiasLauncher dist/${{ matrix.artifact-name }}
+      #     chmod +x dist/${{ matrix.artifact-name }}
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-${{ matrix.platform }}
-          path: dist/${{ matrix.artifact-name }}
-          if-no-files-found: error
-          retention-days: 5
+      # - name: Upload build artifacts
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: build-${{ matrix.platform }}
+      #     path: dist/${{ matrix.artifact-name }}
+      #     if-no-files-found: error
+      #     retention-days: 5
 
   create-release:
     name: Create GitHub Release

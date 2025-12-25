@@ -44,12 +44,12 @@ class ModRinthRequestWrapper:
         kwargs can contain additional facets such as 
         versions, categories (loader), project_type, etc.
         """
-        url = f"{MODRINTH_BASE}/search?{urllib.parse.urlencode({
+        url = "{}/search?{}".format(MODRINTH_BASE, urllib.parse.urlencode({
             'query': query,
             'facets': json.dumps([[f"{k}:{v}"] for k, v in facets.items()] + [[f"{k}:{v}"] for k, v in kwargs.items()]),
             'limit': limit,
             'offset': offset
-        })}"
+        }))
         req = urllib.request.Request(url, headers={"User-Agent": "palgania-launcher/1.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -69,10 +69,10 @@ class ModRinthRequestWrapper:
         """
         GET /project/{project_id}/version
         """
-        url = f"{MODRINTH_BASE}/project/{project_id}/version?{urllib.parse.urlencode({
+        url = "{}/project/{}/version?{}".format(MODRINTH_BASE, project_id, urllib.parse.urlencode({
             'loaders': json.dumps(loaders),
             'game_versions': json.dumps(game_versions)
-        })}"
+        }))
         req = urllib.request.Request(url, headers={"User-Agent": "palgania-launcher/1.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
