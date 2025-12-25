@@ -84,9 +84,11 @@ jobs:
       - name: Build Linux executable
         if: runner.os == 'Linux'
         run: |
+          rm -rf build/ dist/ *.spec  # Nettoyage manuel
+          export PYTHONIOENCODING=utf-8
           CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
           
-          pyinstaller --noconfirm \
+          pyinstaller --noconfirm --clean \
             --onefile \
             --windowed \
             --name "PalganiasLauncher" \
@@ -99,7 +101,6 @@ jobs:
             --collect-all "portablemc" \
             main.py
           
-          # Rename to standard format
           mv dist/PalganiasLauncher dist/${{ matrix.artifact-name }}
           chmod +x dist/${{ matrix.artifact-name }}
 
