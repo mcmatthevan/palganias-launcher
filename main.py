@@ -2,7 +2,7 @@ import customtkinter as ctk
 import json
 import os
 import sys
-from PIL import Image
+from PIL import Image, ImageTk
 from versions import get_version_groups, refresh_version_groups_async
 from tkinter import filedialog, messagebox
 import shlex
@@ -512,6 +512,7 @@ class App(ctk.CTk):
         super().__init__()
         self.title("Palgania's launcher")
         self.resizable(True, True)
+        self._set_window_icon()
         
         # Base de données d'authentification
         self.auth_db = AuthDatabase(pathlib.Path(AUTH_DATABASE_FILE))
@@ -577,6 +578,20 @@ class App(ctk.CTk):
         # Rafraîchir la liste des versions en arrière-plan et mettre à jour l'UI
         self._refresh_versions_async()
         
+    def _set_window_icon(self):
+        """Définir l'icône de la fenêtre à partir du logo."""
+        try:
+            if os.path.exists(LOGO_FILE):
+                img = Image.open(LOGO_FILE)
+                icon = ImageTk.PhotoImage(img)
+                # Conserver une référence pour éviter la collecte
+                self._icon_image_ref = icon
+                self.iconphoto(False, icon)
+            else:
+                logger.warning("Logo introuvable pour l'icône: %s", LOGO_FILE)
+        except Exception as exc:
+            logger.warning("Impossible de définir l'icône de fenêtre: %s", exc)
+
     def setup_ui(self):
         """Configurer l'interface utilisateur"""
         # Frame principal avec logo et contenu
