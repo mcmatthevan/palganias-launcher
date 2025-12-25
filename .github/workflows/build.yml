@@ -9,7 +9,7 @@ on:
       debug:
         description: 'Enable debug output'
         required: false
-        default: false
+        default: 'false'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -112,10 +112,12 @@ jobs:
             --add-data "logo128x128.png:." \
             --add-data "addons_manager.py:." \
             --add-data "versions.py:." \
+            --runtime-hook "pyinstaller_hooks/certifi_env.py" \
             --icon "logo128x128.png" \
             --collect-all "PIL" \
             --collect-all "customtkinter" \
             --collect-all "portablemc" \
+            --collect-data "certifi" \
             --hidden-import "PIL._tkinter_finder" \
             --hidden-import "PIL.ImageTk" \
             --hidden-import "tkinter" \
@@ -145,10 +147,12 @@ jobs:
             --add-data "logo128x128.png:." \
             --add-data "addons_manager.py:." \
             --add-data "versions.py:." \
+            --runtime-hook "pyinstaller_hooks/certifi_env.py" \
             --icon "logo128x128.png" \
             --collect-all "PIL" \
             --collect-all "customtkinter" \
             --collect-all "portablemc" \
+            --collect-data "certifi" \
             --hidden-import "PIL._tkinter_finder" \
             --hidden-import "PIL.ImageTk" \
             --hidden-import "tkinter" \

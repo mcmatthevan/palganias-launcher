@@ -1576,9 +1576,10 @@ class App(ctk.CTk):
             os._exit(0)
             
         except Exception as global_e:
-             logger.error(f"Fatal launch error: {global_e}", exc_info=True)
-             self.app_safe_ui_update(lambda: self.status_label.configure(text=f"Fatal Error: {global_e}", text_color="red"))
-             self.app_safe_ui_update(lambda: self.play_btn.configure(state="normal", fg_color="#4CAF50"))
+            logger.error(f"Fatal launch error: {global_e}", exc_info=True)
+            _fatal_msg = f"Fatal Error: {global_e}"
+            self.app_safe_ui_update(lambda msg=_fatal_msg: self.status_label.configure(text=msg, text_color="red"))
+            self.app_safe_ui_update(lambda: self.play_btn.configure(state="normal", fg_color="#4CAF50"))
 
     def app_safe_ui_update(self, func):
         """Helper pour exécuter des mises à jour UI depuis un thread"""
@@ -1650,7 +1651,8 @@ class App(ctk.CTk):
                      mgr.install_addons(mod_keys)
                  except Exception as e:
                      logger.error(f"Erreur Mods: {e}")
-                     self.app_safe_ui_update(lambda: messagebox.showerror("Erreur Addons", f"Erreur Mods: {e}"))
+                     _mods_err = f"Erreur Mods: {e}"
+                     self.app_safe_ui_update(lambda msg=_mods_err: messagebox.showerror("Erreur Addons", msg))
                      return False
              
              # Shaders (seulement si Iris/Optifine présent, on suppose Iris sur Fabric/Neo)
@@ -1662,14 +1664,16 @@ class App(ctk.CTk):
                      mgr.install_addons(sh_keys)
                  except Exception as e:
                      logger.error(f"Erreur Shaders: {e}")
-                     self.app_safe_ui_update(lambda: messagebox.showerror("Erreur Addons", f"Erreur Shaders: {e}"))
+                     _shaders_err = f"Erreur Shaders: {e}"
+                     self.app_safe_ui_update(lambda msg=_shaders_err: messagebox.showerror("Erreur Addons", msg))
                      return False
                      
              return True
              
          except Exception as e:
              logger.error(f"Erreur globale addons: {e}")
-             self.app_safe_ui_update(lambda: messagebox.showerror("Erreur critique", f"Impossible de gérer les addons: {e}"))
+             _global_addons_err = f"Impossible de gérer les addons: {e}"
+             self.app_safe_ui_update(lambda msg=_global_addons_err: messagebox.showerror("Erreur critique", msg))
              return False
 
     def load_profiles(self):
