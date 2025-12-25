@@ -107,8 +107,8 @@ Aucune installation requise, lancez directement l'exécutable !
 
 Cliquez sur ⚙️ pour accéder aux options avancées :
 
-- **Chemin Java** : `/usr/lib/jvm/java-21-openjdk/bin/java`
-- **Répertoire Minecraft** : `~/.minecraft` (par défaut)
+- **Chemin Java** : `/usr/lib/jvm/java-21-openjdk/bin/java` (sur Linux)
+- **Répertoire Minecraft** : `~/.minecraft` (par défaut sur linux)
 - **Arguments JVM** : `-Xmx4G -XX:+UseG1GC` (exemple pour 4 Go de RAM)
 - **Quick Play Serveur** : `palgania.ovh:25565`
 - **Quick Play Monde** : `Mon Monde` (nom du monde solo)
@@ -128,8 +128,7 @@ palganias-launcher/
 ├── main.py                          # Interface graphique et logique principale
 ├── addons_manager.py                # Gestion des add-ons Modrinth
 ├── versions.py                      # Récupération des versions Minecraft
-├── requirements.txt                 # Dépendances Python
-├── PalganiasLauncher.spec          # Configuration PyInstaller
+├── requirements.txt                 #  Configuration PyInstaller
 └── .github/workflows/build.yml     # CI/CD automatique
 ```
 
@@ -140,8 +139,6 @@ Le launcher utilise un système de cache intelligent :
 - Fonctionnement hors ligne après premier téléchargement
 - Vérification automatique de compatibilité version/loader
 - Préfixe `palgania_launcher_*` pour identification des fichiers
-
-Pour plus de détails, voir [OFFLINE_MODE.md](OFFLINE_MODE.md)
 
 ## 🔧 Développement
 
@@ -168,8 +165,6 @@ Problème `KeyError: 'ROOT'` avec Neoforge sur versions 1.21+. Solutions :
 - Utiliser Forge à la place
 - Utiliser Fabric (recommandé pour mods récents)
 - Utiliser une version antérieure (1.20.x)
-
-Voir [NEOFORGE_1_21_11_FIX.md](NEOFORGE_1_21_11_FIX.md) pour détails.
 
 ### Rate limit Modrinth
 L'API Modrinth limite à 300 requêtes/minute. En cas de dépassement :
