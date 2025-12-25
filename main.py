@@ -603,6 +603,7 @@ class App(ctk.CTk):
                 logo_label = ctk.CTkLabel(logo_frame, image=self.logo_image, text="")
                 logo_label.pack()
             else:
+                print(f"Erreur : Fichier de logo introuvable à l'emplacement {LOGO_FILE}")
                 ctk.CTkLabel(logo_frame, text="Logo", font=("Arial", 20)).pack()
         except Exception as e:
             print(f"Impossible de charger le logo: {e}")
