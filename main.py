@@ -54,12 +54,22 @@ def _parse_config_dir_arg(argv: list[str]) -> Optional[pathlib.Path]:
                 return pathlib.Path(os.path.expanduser(path_str))
     return None
 
+
+def resource_path(relative_path: str) -> str:
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
 CONFIG_DIR = _parse_config_dir_arg(sys.argv) or _default_config_dir()
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 os.environ["PALGANIA_LAUNCHER_CONFIG_DIR"] = str(CONFIG_DIR)
 
 PROFILES_FILE = str(CONFIG_DIR / "profiles.json")
-LOGO_FILE = "logo128x128.png"
+LOGO_FILE = resource_path("logo128x128.png")
 LOG_FILE = str(CONFIG_DIR / "palgania-launcher.latest.log")
 AUTH_DATABASE_FILE = str(CONFIG_DIR / "portablemc_auth.json")
 LAST_ACCOUNT_FILE = str(CONFIG_DIR / "last_account.txt")
@@ -781,7 +791,7 @@ class App(ctk.CTk):
         toggle_frame.pack(fill="x", padx=10, pady=5)
         self.assets_toggle_btn = ctk.CTkButton(
             toggle_frame,
-            text="mods/resource packs/shader packs",
+            text="Mods/Packs de ressources/Packs de shaders ▼",
             width=250,
             command=self._toggle_assets_section,
         )
@@ -790,6 +800,15 @@ class App(ctk.CTk):
         # Conteneur extensible (non packé par défaut)
         self.assets_frame = ctk.CTkFrame(assets_section)
         # self.assets_frame.pack(fill="x", padx=10, pady=5)  # packé via toggle
+
+        # Texte d'explication
+        help_label = ctk.CTkLabel(
+            self.assets_frame,
+            text="💡 Séparez les add-ons par des virgules",
+            font=("Arial", 11),
+            text_color="gray"
+        )
+        help_label.pack(anchor="w", padx=10, pady=(5, 10))
 
         # Champ Resource Packs (toujours affiché quand section étendue)
         self.resource_packs_frame = ctk.CTkFrame(self.assets_frame)
@@ -2095,10 +2114,10 @@ class App(ctk.CTk):
         """Autosauvegarde des champs contenus additionnels vers le profil courant."""
         if self._suspend_assets_autosave:
             return
+        r_kw, m_kw, s_kw = self._get_assets_keywords_from_ui()
         profile_name = self.profile_name.get()
         if profile_name == "Défaut" or profile_name not in self.profiles:
             return
-        r_kw, m_kw, s_kw = self._get_assets_keywords_from_ui()
         # Mettre à jour uniquement les champs concernés
         self.profiles[profile_name]["resource_packs_keywords"] = r_kw
         self.profiles[profile_name]["mods_keywords"] = m_kw

@@ -1,0 +1,93 @@
+name: Build Launcher
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger build on tag push (e.g. v1.0.0)
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: Linux
+          - os: windows-latest
+            name: Windows
+          - os: macos-13
+            name: macOS
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+        
+    - name: Install dependencies
+      run: |
+        python -sim pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    # --- Windows Specific Build ---
+    - name: Build Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $customtkinterPath = python -c "import customtkinter; print(customtkinter.__path__[0])"
+        pyinstaller --noconfirm --onefile --windowed `
+          --name "PalganiasLauncher_${{ matrix.name }}" `
+          --add-data "$customtkinterPath;customtkinter/" `
+          --add-data "logo128x128.png;." `
+          --icon "logo128x128.png" `
+          --hidden-import "PIL._tkinter_finder" `
+          --collect-all "portablemc" `
+          main.py
+
+    # --- Linux Specific Build ---
+    - name: Build Linux
+      if: runner.os == 'Linux'
+      run: |
+        CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
+        pyinstaller --noconfirm --onefile --windowed \
+          --name "PalganiasLauncher_${{ matrix.name }}" \
+          --add-data "$CUSTOMTKINTER_PATH:customtkinter/" \
+          --add-data "logo128x128.png:." \
+          --icon "logo128x128.png" \
+          --hidden-import "PIL._tkinter_finder" \
+          --collect-all "portablemc" \
+          main.py
+          
+    # --- macOS Specific Build ---
+    - name: Build macOS
+      if: runner.os == 'macOS'
+      run: |
+        CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
+        pyinstaller --noconfirm --windowed \
+          --name "PalganiasLauncher_${{ matrix.name }}" \
+          --add-data "$CUSTOMTKINTER_PATH:customtkinter/" \
+          --add-data "logo128x128.png:." \
+          --icon "logo128x128.png" \
+          --hidden-import "PIL._tkinter_finder" \
+          --collect-all "portablemc" \
+          --target-arch universal2 \
+          main.py
+        
+        # Create a ZIP for the .app bundle on macOS
+        cd dist
+        zip -r PalganiasLauncher_macOS.zip PalganiasLauncher_macOS.app
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: PalganiasLauncher-${{ matrix.name }}
+        path: |
+            dist/PalganiasLauncher*
+            !dist/*.app
