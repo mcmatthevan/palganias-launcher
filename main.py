@@ -47,6 +47,15 @@ def _default_config_dir() -> pathlib.Path:
         return home / "Library/Application Support/palgania_launcher"
     return home / ".palgania_launcher"
 
+def _default_game_dir() -> pathlib.Path:
+    system = platform.system().lower()
+    home = pathlib.Path.home()
+    if system == "windows":
+        return home / "AppData/Roaming/.minecraft"
+    if system == "darwin":
+        return home / "Library/Application Support/minecraft"
+    return home / ".minecraft"
+
 def _parse_config_dir_arg(argv: list[str]) -> Optional[pathlib.Path]:
     for arg in argv:
         if arg.startswith("--config-dir="):
@@ -1357,13 +1366,11 @@ class App(ctk.CTk):
             # Préparer le contexte de lancement
             game_dir = self.advanced_settings.get("mc_data_dir", "")
             if game_dir == "":
-                game_dir = os.path.join(os.path.expanduser("~"), ".minecraft")
-            
-            # Utiliser expanduser si nécessaire pour les chemins relatifs ~
-            if game_dir.startswith("~"):
-                game_dir = os.path.expanduser(game_dir)
+                game_dir = _default_game_dir()
+            else:
+                game_dir = pathlib.Path(os.path.expanduser(game_dir))
                 
-            context = Context(main_dir=pathlib.Path(game_dir))
+            context = Context(main_dir=game_dir)
 
             # Préparer / télécharger / installer les addons déclarés
             # Note: _prepare_all_addons doit être sécurisé s'il modifie l'UI, ce qui semble être le cas via status_label
@@ -2024,7 +2031,9 @@ class App(ctk.CTk):
         version_name = self.version.get()
         game_dir = self.advanced_settings.get("mc_data_dir", "")
         if game_dir == "":
-            game_dir = os.path.join(os.path.expanduser("~"), ".minecraft")
+            game_dir = _default_game_dir()
+        else:
+            game_dir = pathlib.Path(os.path.expanduser(game_dir))
 
         mgr = AddonsManager(
             addon_type=addon_type,
