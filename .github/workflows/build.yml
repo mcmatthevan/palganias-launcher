@@ -35,12 +35,8 @@ jobs:
             artifact-name: PalganiasLauncher-windows.exe
             
           - os: macos-15
-            platform: macOS 15 (Intel)
-            artifact-name: PalganiasLauncher-macos-intel
-            
-          - os: macos-15-xlarge
-            platform: macOS 15 (Apple Silicon)
-            artifact-name: PalganiasLauncher-macos-arm64
+            platform: macOS
+            artifact-name: PalganiasLauncher-macos
 
     permissions:
       contents: read
@@ -108,14 +104,6 @@ jobs:
         run: |
           CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
           
-          # Build for current architecture (Intel or Apple Silicon)
-          ARCH_FLAG=""
-          if [[ "${{ matrix.os }}" == "macos-15-xlarge" ]]; then
-            ARCH_FLAG="--target-arch arm64"
-          else
-            ARCH_FLAG="--target-arch x86_64"
-          fi
-          
           pyinstaller --noconfirm \
             --onefile \
             --windowed \
@@ -125,7 +113,7 @@ jobs:
             --icon "logo128x128.png" \
             --hidden-import "PIL._tkinter_finder" \
             --collect-all "portablemc" \
-            $ARCH_FLAG \
+            --target-arch universal2 \
             main.py
           
           # Rename to standard format
