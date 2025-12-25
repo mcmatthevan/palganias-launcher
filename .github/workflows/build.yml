@@ -1,93 +1,193 @@
-name: Build Launcher
+name: Build and Release
 
 on:
   push:
     tags:
-      - 'v*' # Trigger build on tag push (e.g. v1.0.0)
-  workflow_dispatch: # Allow manual trigger
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Enable debug output'
+        required: false
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.11'
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }}
+    name: Build for ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
-            name: Linux
+          - os: ubuntu-24.04
+            platform: Linux
+            artifact-name: PalganiasLauncher-linux
+            
           - os: windows-latest
-            name: Windows
-          - os: macos-13
-            name: macOS
+            platform: Windows
+            artifact-name: PalganiasLauncher-windows.exe
+            
+          - os: macos-15
+            platform: macOS 15 (Intel)
+            artifact-name: PalganiasLauncher-macos-intel
+            
+          - os: macos-15-xlarge
+            platform: macOS 15 (Apple Silicon)
+            artifact-name: PalganiasLauncher-macos-arm64
+
+    permissions:
+      contents: read
 
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        cache: 'pip'
-        
-    - name: Install dependencies
-      run: |
-        python -sim pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pyinstaller
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    # --- Windows Specific Build ---
-    - name: Build Windows
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        $customtkinterPath = python -c "import customtkinter; print(customtkinter.__path__[0])"
-        pyinstaller --noconfirm --onefile --windowed `
-          --name "PalganiasLauncher_${{ matrix.name }}" `
-          --add-data "$customtkinterPath;customtkinter/" `
-          --add-data "logo128x128.png;." `
-          --icon "logo128x128.png" `
-          --hidden-import "PIL._tkinter_finder" `
-          --collect-all "portablemc" `
-          main.py
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
 
-    # --- Linux Specific Build ---
-    - name: Build Linux
-      if: runner.os == 'Linux'
-      run: |
-        CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
-        pyinstaller --noconfirm --onefile --windowed \
-          --name "PalganiasLauncher_${{ matrix.name }}" \
-          --add-data "$CUSTOMTKINTER_PATH:customtkinter/" \
-          --add-data "logo128x128.png:." \
-          --icon "logo128x128.png" \
-          --hidden-import "PIL._tkinter_finder" \
-          --collect-all "portablemc" \
-          main.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $customtkinterPath = python -c "import customtkinter; print(customtkinter.__path__[0])"
           
-    # --- macOS Specific Build ---
-    - name: Build macOS
-      if: runner.os == 'macOS'
-      run: |
-        CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
-        pyinstaller --noconfirm --windowed \
-          --name "PalganiasLauncher_${{ matrix.name }}" \
-          --add-data "$CUSTOMTKINTER_PATH:customtkinter/" \
-          --add-data "logo128x128.png:." \
-          --icon "logo128x128.png" \
-          --hidden-import "PIL._tkinter_finder" \
-          --collect-all "portablemc" \
-          --target-arch universal2 \
-          main.py
-        
-        # Create a ZIP for the .app bundle on macOS
-        cd dist
-        zip -r PalganiasLauncher_macOS.zip PalganiasLauncher_macOS.app
+          pyinstaller --noconfirm `
+            --onefile `
+            --windowed `
+            --name "PalganiasLauncher" `
+            --add-data "$customtkinterPath;customtkinter/" `
+            --add-data "logo128x128.png;." `
+            --icon "logo128x128.png" `
+            --hidden-import "PIL._tkinter_finder" `
+            --collect-all "portablemc" `
+            --version-file=version_info.txt `
+            main.py
+          
+          # Rename to standard format
+          Rename-Item -Path "dist/PalganiasLauncher.exe" -NewName "${{ matrix.artifact-name }}"
 
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: PalganiasLauncher-${{ matrix.name }}
-        path: |
-            dist/PalganiasLauncher*
-            !dist/*.app
+      - name: Build Linux executable
+        if: runner.os == 'Linux'
+        run: |
+          CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
+          
+          pyinstaller --noconfirm \
+            --onefile \
+            --windowed \
+            --name "PalganiasLauncher" \
+            --add-data "$CUSTOMTKINTER_PATH:customtkinter/" \
+            --add-data "logo128x128.png:." \
+            --icon "logo128x128.png" \
+            --hidden-import "PIL._tkinter_finder" \
+            --collect-all "portablemc" \
+            main.py
+          
+          # Rename to standard format
+          mv dist/PalganiasLauncher dist/${{ matrix.artifact-name }}
+          chmod +x dist/${{ matrix.artifact-name }}
+
+      - name: Build macOS executable
+        if: runner.os == 'macOS'
+        run: |
+          CUSTOMTKINTER_PATH=$(python -c "import customtkinter; print(customtkinter.__path__[0])")
+          
+          # Build for current architecture (Intel or Apple Silicon)
+          ARCH_FLAG=""
+          if [[ "${{ matrix.os }}" == "macos-15-xlarge" ]]; then
+            ARCH_FLAG="--target-arch arm64"
+          else
+            ARCH_FLAG="--target-arch x86_64"
+          fi
+          
+          pyinstaller --noconfirm \
+            --onefile \
+            --windowed \
+            --name "PalganiasLauncher" \
+            --add-data "$CUSTOMTKINTER_PATH:customtkinter/" \
+            --add-data "logo128x128.png:." \
+            --icon "logo128x128.png" \
+            --hidden-import "PIL._tkinter_finder" \
+            --collect-all "portablemc" \
+            $ARCH_FLAG \
+            main.py
+          
+          # Rename to standard format
+          mv dist/PalganiasLauncher dist/${{ matrix.artifact-name }}
+          chmod +x dist/${{ matrix.artifact-name }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.platform }}
+          path: dist/${{ matrix.artifact-name }}
+          if-no-files-found: error
+          retention-days: 5
+
+  create-release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f -executable -o -name "*.exe" | while read file; do
+            cp "$file" release-assets/
+          done
+          ls -lh release-assets/
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          # Extract changelog if available
+          if [ -f "CHANGELOG.md" ]; then
+            sed -n "/## \[$VERSION\]/,/## \[/p" CHANGELOG.md | head -n -1 > release_body.txt
+          else
+            echo "Release $VERSION - Palgania's Launcher" > release_body.txt
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/build-*/*
+          body_path: release_body.txt
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
